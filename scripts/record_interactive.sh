@@ -9,12 +9,52 @@ require_robot
 require_teleop
 
 LEROBOT_DATA_HOME="${LEROBOT_DATA_HOME:-$HOME/.cache/huggingface/lerobot}"
-LOCAL_DATASET_DIR="$LEROBOT_DATA_HOME/$DATASET_REPO_ID"
+BASE_LOCAL_DATASET_DIR="$LEROBOT_DATA_HOME/$DATASET_REPO_ID"
 
 count_completed_episodes() {
   python "$ROOT_DIR/scripts/count_dataset_episodes.py" "$LOCAL_DATASET_DIR"
 }
 
+resolve_local_dataset_dir() {
+  if [[ -d "$BASE_LOCAL_DATASET_DIR" ]]; then
+    printf '%s\n' "$BASE_LOCAL_DATASET_DIR"
+    return 0
+  fi
+
+  local parent base_name
+  parent="$(dirname "$BASE_LOCAL_DATASET_DIR")"
+  base_name="$(basename "$BASE_LOCAL_DATASET_DIR")"
+
+  if [[ ! -d "$parent" ]]; then
+    printf '%s\n' "$BASE_LOCAL_DATASET_DIR"
+    return 0
+  fi
+
+  local candidates=()
+  mapfile -t candidates < <(
+    find "$parent" -maxdepth 1 -type d -name "${base_name}_*" -printf '%T@ %p\n' \
+      | sort -rn \
+      | cut -d' ' -f2-
+  )
+
+  local candidate count
+  for candidate in "${candidates[@]}"; do
+    count="$(python "$ROOT_DIR/scripts/count_dataset_episodes.py" "$candidate")"
+    if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )); then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if (( ${#candidates[@]} > 0 )); then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+
+  printf '%s\n' "$BASE_LOCAL_DATASET_DIR"
+}
+
+LOCAL_DATASET_DIR="$(resolve_local_dataset_dir)"
 completed="$(count_completed_episodes)"
 if [[ ! "$completed" =~ ^[0-9]+$ ]]; then
   completed=0
@@ -22,6 +62,7 @@ fi
 
 print_summary
 echo "Interactive recording:"
+echo "  base_dataset_dir=$BASE_LOCAL_DATASET_DIR"
 echo "  local_dataset_dir=$LOCAL_DATASET_DIR"
 echo "  completed_episodes=$completed"
 echo
@@ -51,6 +92,8 @@ while (( completed < NUM_EPISODES )); do
   add_display_args cmd
   cmd+=(
     --dataset.repo_id="$DATASET_REPO_ID"
+    --dataset.root="$LOCAL_DATASET_DIR"
+    --dataset.fps="$DATASET_FPS"
     --dataset.num_episodes="$next_episode"
     --dataset.single_task="$TASK_DESCRIPTION"
     --dataset.episode_time_s="$EPISODE_TIME_S"

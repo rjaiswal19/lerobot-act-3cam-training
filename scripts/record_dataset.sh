@@ -8,7 +8,11 @@ require_task_config
 require_robot
 require_teleop
 
+LEROBOT_DATA_HOME="${LEROBOT_DATA_HOME:-$HOME/.cache/huggingface/lerobot}"
+LOCAL_DATASET_DIR="${LOCAL_DATASET_DIR:-$LEROBOT_DATA_HOME/$DATASET_REPO_ID}"
+
 print_summary
+echo "  local_dataset_dir=$LOCAL_DATASET_DIR"
 setup_live_display
 
 cmd=(lerobot-record)
@@ -17,6 +21,8 @@ add_teleop_args cmd
 add_display_args cmd
 cmd+=(
   --dataset.repo_id="$DATASET_REPO_ID"
+  --dataset.root="$LOCAL_DATASET_DIR"
+  --dataset.fps="$DATASET_FPS"
   --dataset.num_episodes="$NUM_EPISODES"
   --dataset.single_task="$TASK_DESCRIPTION"
   --dataset.episode_time_s="$EPISODE_TIME_S"
