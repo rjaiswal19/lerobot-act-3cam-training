@@ -257,6 +257,8 @@ pi0:
   POLICY_DTYPE=bfloat16
   POLICY_FREEZE_VISION_ENCODER=false
   POLICY_TRAIN_EXPERT_ONLY=false
+  PEFT_METHOD_TYPE=
+  PEFT_R=64
 
 pi05:
   TRAIN_STEPS=3000
@@ -268,6 +270,8 @@ pi05:
   POLICY_FREEZE_VISION_ENCODER=false
   POLICY_TRAIN_EXPERT_ONLY=false
   POLICY_NORMALIZATION_MAPPING={"ACTION":"MEAN_STD","STATE":"MEAN_STD","VISUAL":"IDENTITY"}
+  PEFT_METHOD_TYPE=
+  PEFT_R=64
 ```
 
 Pi0 and Pi0.5 need LeRobot's Pi dependencies on the training machine:
@@ -281,6 +285,26 @@ or from this repo root:
 
 ```bash
 make install-pi
+```
+
+To train Pi0/Pi0.5 with LoRA instead of normal finetuning, install PEFT support:
+
+```bash
+make install-peft
+```
+
+Then edit `configs/policies/pi0.env` or `configs/policies/pi05.env`:
+
+```bash
+PEFT_METHOD_TYPE="LORA"
+PEFT_R=64
+```
+
+The train script will add:
+
+```text
+--peft.method_type=LORA
+--peft.r=64
 ```
 
 GPU selection for training:

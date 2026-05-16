@@ -58,6 +58,10 @@ append_arg_if_set "--policy.temporal_ensemble_coeff" "${POLICY_TEMPORAL_ENSEMBLE
 append_arg_if_set "--policy.optimizer_lr" "${POLICY_OPTIMIZER_LR:-}"
 append_arg_if_set "--policy.optimizer_weight_decay" "${POLICY_OPTIMIZER_WEIGHT_DECAY:-}"
 append_arg_if_set "--policy.optimizer_lr_backbone" "${POLICY_OPTIMIZER_LR_BACKBONE:-}"
+append_arg_if_set "--peft.method_type" "${PEFT_METHOD_TYPE:-}"
+append_arg_if_set "--peft.r" "${PEFT_R:-}"
+append_arg_if_set "--peft.target_modules" "${PEFT_TARGET_MODULES:-}"
+append_arg_if_set "--peft.full_training_modules" "${PEFT_FULL_TRAINING_MODULES:-}"
 
 if declare -p POLICY_EXTRA_ARGS >/dev/null 2>&1; then
   cmd+=("${POLICY_EXTRA_ARGS[@]}")

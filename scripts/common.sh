@@ -9,6 +9,8 @@ TASK_CONFIG_FILE=""
 OVERRIDE_POLICY_DEVICE="${POLICY_DEVICE:-}"
 OVERRIDE_POLICY_TYPE="${POLICY_TYPE:-}"
 OVERRIDE_RECORD_RESUME="${RECORD_RESUME:-}"
+OVERRIDE_PEFT_METHOD_TYPE="${PEFT_METHOD_TYPE:-}"
+OVERRIDE_PEFT_R="${PEFT_R:-}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing config file: $CONFIG_FILE"
@@ -57,6 +59,14 @@ source "$POLICY_CONFIG_FILE"
 
 if [[ -n "$OVERRIDE_RECORD_RESUME" ]]; then
   RECORD_RESUME="$OVERRIDE_RECORD_RESUME"
+fi
+
+if [[ -n "$OVERRIDE_PEFT_METHOD_TYPE" ]]; then
+  PEFT_METHOD_TYPE="$OVERRIDE_PEFT_METHOD_TYPE"
+fi
+
+if [[ -n "$OVERRIDE_PEFT_R" ]]; then
+  PEFT_R="$OVERRIDE_PEFT_R"
 fi
 
 HF_USER_OR_ORG="${HF_USER_OR_ORG:-}"
@@ -176,6 +186,8 @@ print_summary() {
   echo "  n_action_steps=${POLICY_N_ACTION_STEPS:-}"
   echo "  n_obs_steps=${POLICY_N_OBS_STEPS:-}"
   echo "  temporal_ensemble_coeff=${POLICY_TEMPORAL_ENSEMBLE_COEFF:-}"
+  echo "  peft_method=${PEFT_METHOD_TYPE:-}"
+  echo "  peft_r=${PEFT_R:-}"
   echo "  wandb_enable=$WANDB_ENABLE"
   echo "  policy_push_to_hub=$POLICY_PUSH_TO_HUB"
   echo "Recording:"

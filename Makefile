@@ -4,7 +4,7 @@ KNOWN_TASKS := pour swirl
 TASK_FROM_GOALS := $(filter $(KNOWN_TASKS),$(MAKECMDGOALS))
 TASK ?= $(firstword $(TASK_FROM_GOALS))
 
-.PHONY: help init setup install-pi config cameras calibrate-follower calibrate-leader teleop record resume record-fixed train rollout $(KNOWN_TASKS)
+.PHONY: help init setup install-pi install-peft config cameras calibrate-follower calibrate-leader teleop record resume record-fixed train rollout $(KNOWN_TASKS)
 
 help:
 	@echo "Usage:"
@@ -21,6 +21,7 @@ help:
 	@echo "  make init"
 	@echo "  make setup"
 	@echo "  make install-pi"
+	@echo "  make install-peft"
 	@echo "  make cameras"
 	@echo "  make calibrate-follower"
 	@echo "  make calibrate-leader"
@@ -32,6 +33,9 @@ setup: init
 
 install-pi:
 	@bash scripts/install_pi_deps.sh
+
+install-peft:
+	@bash scripts/install_peft_deps.sh
 
 config:
 	@TASK="$(TASK)" bash scripts/show_config.sh
