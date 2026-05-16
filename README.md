@@ -129,6 +129,10 @@ make teleop pour
 ```bash
 make record pour
 make record swirl
+
+# Continue a partially recorded dataset after stopping or crashing.
+make resume pour
+make resume swirl
 ```
 
 5. Train ACT:
@@ -179,6 +183,7 @@ Check these defaults:
 - `NUM_EPISODES=50`
 - `EPISODE_TIME_S=60`
 - `RESET_TIME_S=20`
+- `RECORD_RESUME=false`
 - `POLICY_DEVICE=cuda`
 
 GPU selection for training:
@@ -202,6 +207,14 @@ POLICY_DEVICE="cuda:1" make train pour
 ```
 
 If your ZED appears as one side-by-side OpenCV stream instead of separate left/right camera IDs, this scaffold needs a small custom camera adapter or a preprocessing split step. Start by running `bash scripts/find_cameras.sh` and send me the output.
+
+If you stop after some completed episodes and want to continue later, run:
+
+```bash
+make resume pour
+```
+
+LeRobot resumes the same dataset instead of starting from episode 1 again.
 
 ## Notes
 

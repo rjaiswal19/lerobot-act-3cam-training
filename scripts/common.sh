@@ -7,6 +7,7 @@ PRIVATE_ENV_FILE="${PRIVATE_ENV_FILE:-$ROOT_DIR/.env}"
 TASK="${TASK:-}"
 TASK_CONFIG_FILE=""
 OVERRIDE_POLICY_DEVICE="${POLICY_DEVICE:-}"
+OVERRIDE_RECORD_RESUME="${RECORD_RESUME:-}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing config file: $CONFIG_FILE"
@@ -36,6 +37,10 @@ fi
 
 if [[ -n "$OVERRIDE_POLICY_DEVICE" ]]; then
   POLICY_DEVICE="$OVERRIDE_POLICY_DEVICE"
+fi
+
+if [[ -n "$OVERRIDE_RECORD_RESUME" ]]; then
+  RECORD_RESUME="$OVERRIDE_RECORD_RESUME"
 fi
 
 HF_USER_OR_ORG="${HF_USER_OR_ORG:-}"
@@ -124,4 +129,10 @@ print_summary() {
   echo "  policy_device=$POLICY_DEVICE"
   echo "  wandb_enable=$WANDB_ENABLE"
   echo "  policy_push_to_hub=$POLICY_PUSH_TO_HUB"
+  echo "Recording:"
+  echo "  num_episodes=$NUM_EPISODES"
+  echo "  episode_time_s=$EPISODE_TIME_S"
+  echo "  reset_time_s=$RESET_TIME_S"
+  echo "  push_to_hub=$PUSH_TO_HUB"
+  echo "  resume=$RECORD_RESUME"
 }
