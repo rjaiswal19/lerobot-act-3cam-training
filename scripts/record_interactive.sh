@@ -15,10 +15,39 @@ count_completed_episodes() {
   python "$ROOT_DIR/scripts/count_dataset_episodes.py" "$LOCAL_DATASET_DIR"
 }
 
+dataset_fps() {
+  local dataset_dir="$1"
+  python - "$dataset_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+info_path = Path(sys.argv[1]) / "meta" / "info.json"
+try:
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+fps = info.get("fps")
+if isinstance(fps, int):
+    print(fps)
+PY
+}
+
+dataset_matches_fps() {
+  local dataset_dir="$1"
+  local fps
+  fps="$(dataset_fps "$dataset_dir")"
+  [[ -z "$fps" || "$fps" == "$DATASET_FPS" ]]
+}
+
 resolve_local_dataset_dir() {
   if [[ -d "$BASE_LOCAL_DATASET_DIR" ]]; then
-    printf '%s\n' "$BASE_LOCAL_DATASET_DIR"
-    return 0
+    if dataset_matches_fps "$BASE_LOCAL_DATASET_DIR"; then
+      printf '%s\n' "$BASE_LOCAL_DATASET_DIR"
+      return 0
+    fi
+    echo "Skipping $BASE_LOCAL_DATASET_DIR because its fps=$(dataset_fps "$BASE_LOCAL_DATASET_DIR") but DATASET_FPS=$DATASET_FPS." >&2
   fi
 
   local parent base_name
@@ -39,17 +68,15 @@ resolve_local_dataset_dir() {
 
   local candidate count
   for candidate in "${candidates[@]}"; do
+    if ! dataset_matches_fps "$candidate"; then
+      continue
+    fi
     count="$(python "$ROOT_DIR/scripts/count_dataset_episodes.py" "$candidate")"
     if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )); then
       printf '%s\n' "$candidate"
       return 0
     fi
   done
-
-  if (( ${#candidates[@]} > 0 )); then
-    printf '%s\n' "${candidates[0]}"
-    return 0
-  fi
 
   printf '%s\n' "$BASE_LOCAL_DATASET_DIR"
 }
