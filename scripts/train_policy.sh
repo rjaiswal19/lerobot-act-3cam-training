@@ -6,12 +6,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/common.sh"
 require_hf
 require_task_config
 
-echo "Training ACT on dataset: $DATASET_REPO_ID"
+echo "Training $POLICY_TYPE on dataset: $DATASET_REPO_ID"
 echo "Policy output repo:      $POLICY_REPO_ID"
 
 lerobot-train \
   --dataset.repo_id="$DATASET_REPO_ID" \
-  --policy.type=act \
+  --policy.type="$POLICY_TYPE" \
   --output_dir="$TRAIN_OUTPUT_DIR" \
   --job_name="$JOB_NAME" \
   --policy.device="$POLICY_DEVICE" \

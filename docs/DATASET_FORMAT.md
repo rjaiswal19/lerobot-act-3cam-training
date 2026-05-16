@@ -2,13 +2,13 @@
 
 You were remembering the right thing: LeRobot uses Parquet.
 
-For this ACT setup, the data flow is:
+For this setup, the data flow is:
 
 ```text
 robot + cameras
   -> lerobot-record
   -> LeRobotDataset folder / Hugging Face dataset repo
-  -> lerobot-train --policy.type=act
+  -> lerobot-train --policy.type="$POLICY_TYPE"
 ```
 
 ## What Gets Stored
@@ -38,9 +38,9 @@ videos/
 
 The exact shard filenames may vary by LeRobot version. Use the folder names above as the mental model.
 
-## What ACT Reads
+## What The Policy Reads
 
-During training, ACT receives samples like:
+During training, the policy receives samples like:
 
 ```text
 observation.state
@@ -52,11 +52,11 @@ action
 
 The camera count, image shapes, joint-state dimension, and action dimension are inferred from the dataset metadata.
 
-That is why `scripts/train_act.sh` only needs:
+That is why `scripts/train_policy.sh` only needs:
 
 ```bash
 --dataset.repo_id="$HF_USER_OR_ORG/$DATASET_NAME"
---policy.type=act
+--policy.type="$POLICY_TYPE"
 ```
 
 ## What You Need To Fill
@@ -82,6 +82,6 @@ Only if you are importing an existing dataset that was recorded outside LeRobot.
 For your setup, the normal path is easier:
 
 ```bash
-bash scripts/record_dataset.sh
-bash scripts/train_act.sh
+make record pour
+make train pour
 ```

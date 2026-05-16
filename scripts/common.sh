@@ -7,6 +7,7 @@ PRIVATE_ENV_FILE="${PRIVATE_ENV_FILE:-$ROOT_DIR/.env}"
 TASK="${TASK:-}"
 TASK_CONFIG_FILE=""
 OVERRIDE_POLICY_DEVICE="${POLICY_DEVICE:-}"
+OVERRIDE_POLICY_TYPE="${POLICY_TYPE:-}"
 OVERRIDE_RECORD_RESUME="${RECORD_RESUME:-}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -39,16 +40,42 @@ if [[ -n "$OVERRIDE_POLICY_DEVICE" ]]; then
   POLICY_DEVICE="$OVERRIDE_POLICY_DEVICE"
 fi
 
+if [[ -n "$OVERRIDE_POLICY_TYPE" ]]; then
+  POLICY_TYPE="$OVERRIDE_POLICY_TYPE"
+fi
+
 if [[ -n "$OVERRIDE_RECORD_RESUME" ]]; then
   RECORD_RESUME="$OVERRIDE_RECORD_RESUME"
 fi
 
 HF_USER_OR_ORG="${HF_USER_OR_ORG:-}"
-DATASET_NAME="${DATASET_NAME:-}"
-POLICY_NAME="${POLICY_NAME:-}"
+POLICY_TYPE="${POLICY_TYPE:-act}"
+TASK_SLUG="${TASK_SLUG:-$TASK}"
+if [[ -z "${DATASET_NAME_TEMPLATE:-}" ]]; then
+  DATASET_NAME_TEMPLATE="seeed_{policy}_3cam_{task}_training"
+fi
+if [[ -z "${POLICY_NAME_TEMPLATE:-}" ]]; then
+  POLICY_NAME_TEMPLATE="{policy}_seeed_3cam_{task}"
+fi
+if [[ -z "${TRAIN_OUTPUT_DIR_TEMPLATE:-}" ]]; then
+  TRAIN_OUTPUT_DIR_TEMPLATE="outputs/train/{policy}_seeed_3cam_{task}"
+fi
+if [[ -z "${JOB_NAME_TEMPLATE:-}" ]]; then
+  JOB_NAME_TEMPLATE="{policy}_seeed_3cam_{task}"
+fi
 TASK_DESCRIPTION="${TASK_DESCRIPTION:-}"
-TRAIN_OUTPUT_DIR="${TRAIN_OUTPUT_DIR:-}"
-JOB_NAME="${JOB_NAME:-}"
+
+template_value() {
+  local template="$1"
+  local value="${template//\{policy\}/$POLICY_TYPE}"
+  value="${value//\{task\}/$TASK_SLUG}"
+  printf '%s' "$value"
+}
+
+DATASET_NAME="${DATASET_NAME:-$(template_value "$DATASET_NAME_TEMPLATE")}"
+POLICY_NAME="${POLICY_NAME:-$(template_value "$POLICY_NAME_TEMPLATE")}"
+TRAIN_OUTPUT_DIR="${TRAIN_OUTPUT_DIR:-$(template_value "$TRAIN_OUTPUT_DIR_TEMPLATE")}"
+JOB_NAME="${JOB_NAME:-$(template_value "$JOB_NAME_TEMPLATE")}"
 
 DATASET_REPO_ID="${HF_USER_OR_ORG:-CHANGE_ME_HF_USER_OR_ORG}/${DATASET_NAME:-CHANGE_ME_DATASET_NAME}"
 POLICY_REPO_ID="${HF_USER_OR_ORG:-CHANGE_ME_HF_USER_OR_ORG}/${POLICY_NAME:-CHANGE_ME_POLICY_NAME}"
@@ -79,6 +106,8 @@ require_task_config() {
   fi
   require_value DATASET_NAME
   require_value POLICY_NAME
+  require_value POLICY_TYPE
+  require_value TASK_SLUG
   require_value TASK_DESCRIPTION
   require_value TRAIN_OUTPUT_DIR
   require_value JOB_NAME
@@ -117,6 +146,7 @@ print_summary() {
   echo "Config: $CONFIG_FILE"
   if [[ -n "$TASK" ]]; then
     echo "Task:   $TASK ($TASK_CONFIG_FILE)"
+    echo "Policy type: $POLICY_TYPE"
     echo "Dataset repo: $DATASET_REPO_ID"
     echo "Policy repo:  $POLICY_REPO_ID"
   else
@@ -126,6 +156,7 @@ print_summary() {
   echo "Teleop:       $TELEOP_TYPE at $TELEOP_PORT id=$TELEOP_ID"
   print_camera_summary
   echo "Training:"
+  echo "  policy_type=$POLICY_TYPE"
   echo "  policy_device=$POLICY_DEVICE"
   echo "  wandb_enable=$WANDB_ENABLE"
   echo "  policy_push_to_hub=$POLICY_PUSH_TO_HUB"

@@ -58,7 +58,7 @@ record-fixed:
 
 train:
 	@test -n "$(TASK)" || (echo "Choose a task: make train pour OR make train swirl"; exit 1)
-	@TASK="$(TASK)" bash scripts/train_act.sh
+	@TASK="$(TASK)" bash scripts/train_policy.sh
 
 rollout:
 	@test -n "$(TASK)" || (echo "Choose a task: make rollout pour OR make rollout swirl"; exit 1)

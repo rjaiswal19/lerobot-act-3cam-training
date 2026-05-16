@@ -1,12 +1,12 @@
-# LeRobot ACT 3-Camera Training Scaffold
+# LeRobot 3-Camera Policy Training Scaffold
 
-This repo is a starter setup for training a LeRobot ACT policy with:
+This repo is a starter setup for training a LeRobot policy with:
 
 - one wrist RGB camera
 - two RGB feeds from a ZED stereo camera, treated as `zed_left` and `zed_right`
 - a Seeed / SO-101-style follower arm
 
-ACT uses RGB camera frames plus robot joint state and learns to predict future actions. It does not use ZED depth in this scaffold.
+The default policy is ACT. Change `POLICY_TYPE` in `configs/local.env` to another LeRobot policy type, such as `pi0` or `pi05`, after confirming your installed LeRobot version supports it. This scaffold uses RGB camera frames plus robot joint state; it does not use ZED depth.
 
 ## What File Format Is Used?
 
@@ -38,12 +38,12 @@ data/       Apache Parquet files for state, action, timestamp, indices
 videos/     MP4 files for wrist / zed_left / zed_right camera streams
 ```
 
-So yes, Parquet is involved. But for ACT you normally do **not** manually create a `.parquet` file. You record a LeRobotDataset, then train directly from its repo id:
+So yes, Parquet is involved. You normally do **not** manually create a `.parquet` file. You record a LeRobotDataset, then train directly from its repo id:
 
 ```bash
 lerobot-train \
   --dataset.repo_id="${HF_USER_OR_ORG}/${DATASET_NAME}" \
-  --policy.type=act
+  --policy.type="${POLICY_TYPE}"
 ```
 
 The scripts in this repo just wrap those commands so you do not have to retype all robot, camera, and dataset arguments.
@@ -86,7 +86,7 @@ Edit:
 configs/local.env
 ```
 
-The file contains shared hardware defaults for ACT and the 3-camera setup.
+The file contains shared hardware, recording, and training defaults for the 3-camera setup.
 
 Task-specific dataset names and task descriptions live in:
 
@@ -139,7 +139,7 @@ make resume swirl
 make record-fixed pour
 ```
 
-5. Train ACT:
+5. Train the selected policy:
 
 ```bash
 make train pour
@@ -175,6 +175,7 @@ Required before recording:
 - `WRIST_CAMERA_WIDTH`, `WRIST_CAMERA_HEIGHT`, `WRIST_CAMERA_FPS`: wrist camera capture format.
 - `ZED_LEFT_CAMERA_WIDTH`, `ZED_LEFT_CAMERA_HEIGHT`, `ZED_LEFT_CAMERA_FPS`: ZED left capture format.
 - `ZED_RIGHT_CAMERA_WIDTH`, `ZED_RIGHT_CAMERA_HEIGHT`, `ZED_RIGHT_CAMERA_FPS`: ZED right capture format.
+- `POLICY_TYPE`: LeRobot policy type, default `act`.
 - `TASK_DESCRIPTION`: exact task phrase to store with every episode, in `configs/tasks/pour.env` or `configs/tasks/swirl.env`.
 
 Check these defaults:
@@ -188,7 +189,34 @@ Check these defaults:
 - `EPISODE_TIME_S=60`
 - `RESET_TIME_S=20`, only used by `make record-fixed`
 - `RECORD_RESUME=false`
+- `POLICY_TYPE=act`
 - `POLICY_DEVICE=cuda`
+
+Dataset and model names are generated from `POLICY_TYPE` plus the task. With:
+
+```bash
+POLICY_TYPE="act"
+```
+
+`make config pour` resolves:
+
+```text
+dataset: seeed_act_3cam_pour_training
+policy:  act_seeed_3cam_pour
+```
+
+If you change:
+
+```bash
+POLICY_TYPE="pi0"
+```
+
+then `make config pour` resolves:
+
+```text
+dataset: seeed_pi0_3cam_pour_training
+policy:  pi0_seeed_3cam_pour
+```
 
 GPU selection for training:
 
@@ -237,7 +265,7 @@ Both resume the same dataset instead of starting from episode 1 again.
 ## Notes
 
 - The dataset is recorded in LeRobot format and normally stored under `~/.cache/huggingface/lerobot/{repo-id}`.
-- Training uses the camera/state/action shapes saved in the dataset, so the ACT config does not need hard-coded camera count or joint dimensions.
+- Training uses the camera/state/action shapes saved in the dataset, so the policy config does not need hard-coded camera count or joint dimensions.
 - Keep camera placement fixed between data collection and deployment.
 
 More detail: [docs/DATASET_FORMAT.md](docs/DATASET_FORMAT.md).
