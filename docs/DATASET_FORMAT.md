@@ -52,6 +52,21 @@ action
 
 The camera count, image shapes, joint-state dimension, and action dimension are inferred from the dataset metadata.
 
+Dataset repo names are task-specific and policy-independent:
+
+```text
+pour  -> seeed_3cam_pour_training
+swirl -> seeed_3cam_swirl_beaker_training
+```
+
+Policy/model repo names include the selected `POLICY_TYPE`:
+
+```text
+act  + pour -> act_seeed_3cam_pour
+pi0  + pour -> pi0_seeed_3cam_pour
+pi05 + pour -> pi05_seeed_3cam_pour
+```
+
 That is why `scripts/train_policy.sh` only needs:
 
 ```bash

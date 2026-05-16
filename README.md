@@ -95,6 +95,14 @@ configs/tasks/pour.env
 configs/tasks/swirl.env
 ```
 
+Policy-specific training defaults live in:
+
+```text
+configs/policies/act.env
+configs/policies/pi0.env
+configs/policies/pi05.env
+```
+
 You can also create a private `.env` file for local overrides such as:
 
 ```bash
@@ -192,7 +200,7 @@ Check these defaults:
 - `POLICY_TYPE=act`
 - `POLICY_DEVICE=cuda`
 
-Dataset and model names are generated from `POLICY_TYPE` plus the task. With:
+Dataset names are task-specific and policy-independent. Model/output names include the policy type. With:
 
 ```bash
 POLICY_TYPE="act"
@@ -201,7 +209,7 @@ POLICY_TYPE="act"
 `make config pour` resolves:
 
 ```text
-dataset: seeed_act_3cam_pour_training
+dataset: seeed_3cam_pour_training
 policy:  act_seeed_3cam_pour
 ```
 
@@ -214,8 +222,58 @@ POLICY_TYPE="pi0"
 then `make config pour` resolves:
 
 ```text
-dataset: seeed_pi0_3cam_pour_training
+dataset: seeed_3cam_pour_training
 policy:  pi0_seeed_3cam_pour
+```
+
+Edit the selected policy file to tune policy-specific defaults:
+
+```text
+configs/policies/act.env
+configs/policies/pi0.env
+configs/policies/pi05.env
+```
+
+Current defaults:
+
+```text
+act:
+  TRAIN_STEPS=50000
+  TRAIN_BATCH_SIZE=8
+
+pi0:
+  TRAIN_STEPS=3000
+  TRAIN_BATCH_SIZE=32
+  POLICY_PRETRAINED_PATH=lerobot/pi0_base
+  POLICY_COMPILE_MODEL=true
+  POLICY_GRADIENT_CHECKPOINTING=true
+  POLICY_DTYPE=bfloat16
+  POLICY_FREEZE_VISION_ENCODER=false
+  POLICY_TRAIN_EXPERT_ONLY=false
+
+pi05:
+  TRAIN_STEPS=3000
+  TRAIN_BATCH_SIZE=32
+  POLICY_PRETRAINED_PATH=lerobot/pi05_base
+  POLICY_COMPILE_MODEL=true
+  POLICY_GRADIENT_CHECKPOINTING=true
+  POLICY_DTYPE=bfloat16
+  POLICY_FREEZE_VISION_ENCODER=false
+  POLICY_TRAIN_EXPERT_ONLY=false
+  POLICY_NORMALIZATION_MAPPING={"ACTION":"MEAN_STD","STATE":"MEAN_STD","VISUAL":"IDENTITY"}
+```
+
+Pi0 and Pi0.5 need LeRobot's Pi dependencies on the training machine:
+
+```bash
+cd external/lerobot
+python -m pip install -e ".[pi]"
+```
+
+or from this repo root:
+
+```bash
+make install-pi
 ```
 
 GPU selection for training:

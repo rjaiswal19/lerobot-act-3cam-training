@@ -44,15 +44,25 @@ if [[ -n "$OVERRIDE_POLICY_TYPE" ]]; then
   POLICY_TYPE="$OVERRIDE_POLICY_TYPE"
 fi
 
+POLICY_TYPE="${POLICY_TYPE:-act}"
+POLICY_CONFIG_FILE="${POLICY_CONFIG_FILE:-$ROOT_DIR/configs/policies/${POLICY_TYPE}.env}"
+if [[ ! -f "$POLICY_CONFIG_FILE" ]]; then
+  echo "Missing policy config: $POLICY_CONFIG_FILE"
+  echo "Available policies:"
+  find "$ROOT_DIR/configs/policies" -maxdepth 1 -name '*.env' -exec basename {} .env \; | sort
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$POLICY_CONFIG_FILE"
+
 if [[ -n "$OVERRIDE_RECORD_RESUME" ]]; then
   RECORD_RESUME="$OVERRIDE_RECORD_RESUME"
 fi
 
 HF_USER_OR_ORG="${HF_USER_OR_ORG:-}"
-POLICY_TYPE="${POLICY_TYPE:-act}"
 TASK_SLUG="${TASK_SLUG:-$TASK}"
 if [[ -z "${DATASET_NAME_TEMPLATE:-}" ]]; then
-  DATASET_NAME_TEMPLATE="seeed_{policy}_3cam_{task}_training"
+  DATASET_NAME_TEMPLATE="seeed_3cam_{task}_training"
 fi
 if [[ -z "${POLICY_NAME_TEMPLATE:-}" ]]; then
   POLICY_NAME_TEMPLATE="{policy}_seeed_3cam_{task}"
@@ -147,6 +157,7 @@ print_summary() {
   if [[ -n "$TASK" ]]; then
     echo "Task:   $TASK ($TASK_CONFIG_FILE)"
     echo "Policy type: $POLICY_TYPE"
+    echo "Policy config: $POLICY_CONFIG_FILE"
     echo "Dataset repo: $DATASET_REPO_ID"
     echo "Policy repo:  $POLICY_REPO_ID"
   else
@@ -158,6 +169,9 @@ print_summary() {
   echo "Training:"
   echo "  policy_type=$POLICY_TYPE"
   echo "  policy_device=$POLICY_DEVICE"
+  echo "  steps=${TRAIN_STEPS:-}"
+  echo "  batch_size=${TRAIN_BATCH_SIZE:-}"
+  echo "  pretrained_path=${POLICY_PRETRAINED_PATH:-}"
   echo "  wandb_enable=$WANDB_ENABLE"
   echo "  policy_push_to_hub=$POLICY_PUSH_TO_HUB"
   echo "Recording:"
