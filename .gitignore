@@ -1,0 +1,13 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+
+# LeRobot / training outputs
+outputs/
+external/
+wandb/
+
+# Local secrets if you add any later
+.env
+*.token
