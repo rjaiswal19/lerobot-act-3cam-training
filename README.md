@@ -184,7 +184,7 @@ Required before recording:
 - `ZED_LEFT_CAMERA_WIDTH`, `ZED_LEFT_CAMERA_HEIGHT`, `ZED_LEFT_CAMERA_FPS`: ZED left capture format.
 - `ZED_RIGHT_CAMERA_WIDTH`, `ZED_RIGHT_CAMERA_HEIGHT`, `ZED_RIGHT_CAMERA_FPS`: ZED right capture format.
 - `POLICY_TYPE`: LeRobot policy type, default `act`.
-- `TASK_DESCRIPTION`: exact task phrase to store with every episode, in `configs/tasks/pour.env` or `configs/tasks/swirl.env`.
+- `TASK_DESCRIPTION`: exact task phrase to store with every episode, in `configs/tasks/*.env`. You can override it per run with `TEXT="Pick up the red test tube" make record pick`.
 
 Check these defaults:
 

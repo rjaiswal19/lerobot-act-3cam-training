@@ -25,6 +25,8 @@ echo "Interactive recording:"
 echo "  local_dataset_dir=$LOCAL_DATASET_DIR"
 echo "  completed_episodes=$completed"
 echo
+setup_live_display
+echo
 
 while (( completed < NUM_EPISODES )); do
   next_episode=$((completed + 1))
@@ -46,8 +48,8 @@ while (( completed < NUM_EPISODES )); do
   cmd=(lerobot-record)
   add_robot_args cmd true
   add_teleop_args cmd
+  add_display_args cmd
   cmd+=(
-    --display_data="$DISPLAY_DATA"
     --dataset.repo_id="$DATASET_REPO_ID"
     --dataset.num_episodes="$next_episode"
     --dataset.single_task="$TASK_DESCRIPTION"

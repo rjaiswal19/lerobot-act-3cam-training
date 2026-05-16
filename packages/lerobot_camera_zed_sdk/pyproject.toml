@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_camera_zed_sdk"
+version = "0.1.0"
+description = "LeRobot camera plugin for Stereolabs ZED SDK cameras"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

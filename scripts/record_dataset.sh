@@ -9,12 +9,13 @@ require_robot
 require_teleop
 
 print_summary
+setup_live_display
 
 cmd=(lerobot-record)
 add_robot_args cmd true
 add_teleop_args cmd
+add_display_args cmd
 cmd+=(
-  --display_data="$DISPLAY_DATA"
   --dataset.repo_id="$DATASET_REPO_ID"
   --dataset.num_episodes="$NUM_EPISODES"
   --dataset.single_task="$TASK_DESCRIPTION"

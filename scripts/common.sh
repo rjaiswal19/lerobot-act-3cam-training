@@ -16,6 +16,8 @@ OVERRIDE_POLICY_TYPE="${POLICY_TYPE:-}"
 OVERRIDE_RECORD_RESUME="${RECORD_RESUME:-}"
 OVERRIDE_PEFT_METHOD_TYPE="${PEFT_METHOD_TYPE:-}"
 OVERRIDE_PEFT_R="${PEFT_R:-}"
+OVERRIDE_TASK_DESCRIPTION="${TEXT:-${TASK_TEXT:-${TASK_PROMPT:-${PROMPT:-${TASK_DESCRIPTION:-}}}}}"
+RERUN_SERVER_PID=""
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing config file: $CONFIG_FILE"
@@ -73,6 +75,19 @@ fi
 if [[ -n "$OVERRIDE_PEFT_R" ]]; then
   PEFT_R="$OVERRIDE_PEFT_R"
 fi
+
+if [[ -n "$OVERRIDE_TASK_DESCRIPTION" ]]; then
+  TASK_DESCRIPTION="$OVERRIDE_TASK_DESCRIPTION"
+fi
+
+DISPLAY_DATA="${DISPLAY_DATA:-false}"
+DISPLAY_IP="${DISPLAY_IP:-}"
+DISPLAY_PORT="${DISPLAY_PORT:-}"
+DISPLAY_COMPRESSED_IMAGES="${DISPLAY_COMPRESSED_IMAGES:-}"
+RERUN_LIVE_VIEW="${RERUN_LIVE_VIEW:-true}"
+RERUN_WEB_PORT="${RERUN_WEB_PORT:-${VIZ_WEB_PORT:-9090}}"
+RERUN_GRPC_PORT="${RERUN_GRPC_PORT:-${VIZ_GRPC_PORT:-9876}}"
+RERUN_SERVER_MEMORY_LIMIT="${RERUN_SERVER_MEMORY_LIMIT:-25%}"
 
 HF_USER_OR_ORG="${HF_USER_OR_ORG:-}"
 TASK_SLUG="${TASK_SLUG:-$TASK}"
@@ -150,11 +165,70 @@ require_teleop() {
   require_value TELEOP_ID
 }
 
+camera_value() {
+  local prefix="$1"
+  local suffix="$2"
+  local default="${3:-}"
+  local name="${prefix}_CAMERA_${suffix}"
+  printf '%s' "${!name:-$default}"
+}
+
+append_camera_field() {
+  local -n spec_ref="$1"
+  local name="$2"
+  local value="${3:-}"
+  if [[ -n "$value" ]]; then
+    spec_ref+=", $name: $value"
+  fi
+}
+
+camera_spec_entry() {
+  local label="$1"
+  local prefix="$2"
+  local type
+  type="$(camera_value "$prefix" TYPE opencv)"
+
+  local width height fps spec
+  width="$(camera_value "$prefix" WIDTH "${CAMERA_WIDTH:-}")"
+  height="$(camera_value "$prefix" HEIGHT "${CAMERA_HEIGHT:-}")"
+  fps="$(camera_value "$prefix" FPS "${CAMERA_FPS:-}")"
+  spec="$label: {type: $type"
+
+  case "$type" in
+    opencv)
+      append_camera_field spec index_or_path "$(camera_value "$prefix" INDEX)"
+      append_camera_field spec width "$width"
+      append_camera_field spec height "$height"
+      append_camera_field spec fps "$fps"
+      append_camera_field spec fourcc "$(camera_value "$prefix" FOURCC)"
+      ;;
+    zed_sdk)
+      append_camera_field spec serial_number "${ZED_CAMERA_SERIAL_NUMBER:-}"
+      append_camera_field spec camera_id "${ZED_CAMERA_ID:-}"
+      append_camera_field spec side "$(camera_value "$prefix" SIDE)"
+      append_camera_field spec resolution "${ZED_CAMERA_RESOLUTION:-HD1200}"
+      append_camera_field spec depth_mode "${ZED_CAMERA_DEPTH_MODE:-NONE}"
+      append_camera_field spec width "$width"
+      append_camera_field spec height "$height"
+      append_camera_field spec fps "$fps"
+      append_camera_field spec color_mode "${ZED_CAMERA_COLOR_MODE:-rgb}"
+      append_camera_field spec timeout_ms "${ZED_CAMERA_TIMEOUT_MS:-2000}"
+      append_camera_field spec warmup_s "${ZED_CAMERA_WARMUP_S:-0.5}"
+      ;;
+    *)
+      echo "Unsupported camera type '$type' for $label." >&2
+      exit 1
+      ;;
+  esac
+
+  printf '%s}' "$spec"
+}
+
 camera_spec() {
-  printf '{ wrist: {type: opencv, index_or_path: %s, width: %s, height: %s, fps: %s}, zed_left: {type: opencv, index_or_path: %s, width: %s, height: %s, fps: %s}, zed_right: {type: opencv, index_or_path: %s, width: %s, height: %s, fps: %s}}' \
-    "$WRIST_CAMERA_INDEX" "$WRIST_CAMERA_WIDTH" "$WRIST_CAMERA_HEIGHT" "$WRIST_CAMERA_FPS" \
-    "$ZED_LEFT_CAMERA_INDEX" "$ZED_LEFT_CAMERA_WIDTH" "$ZED_LEFT_CAMERA_HEIGHT" "$ZED_LEFT_CAMERA_FPS" \
-    "$ZED_RIGHT_CAMERA_INDEX" "$ZED_RIGHT_CAMERA_WIDTH" "$ZED_RIGHT_CAMERA_HEIGHT" "$ZED_RIGHT_CAMERA_FPS"
+  printf '{ %s, %s, %s}' \
+    "$(camera_spec_entry wrist WRIST)" \
+    "$(camera_spec_entry zed_left ZED_LEFT)" \
+    "$(camera_spec_entry zed_right ZED_RIGHT)"
 }
 
 append_arg_if_set() {
@@ -199,6 +273,141 @@ add_teleop_args() {
   fi
 }
 
+truthy() {
+  case "${1:-}" in
+    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_viewer_host() {
+  if [[ -n "${VIEWER_HOST:-}" ]]; then
+    printf '%s' "$VIEWER_HOST"
+    return 0
+  fi
+  if [[ -n "${RERUN_HOST:-}" ]]; then
+    printf '%s' "$RERUN_HOST"
+    return 0
+  fi
+  if [[ -n "${VIZ_HOST:-}" ]]; then
+    printf '%s' "$VIZ_HOST"
+    return 0
+  fi
+
+  if command -v tailscale >/dev/null 2>&1; then
+    local tailscale_ip
+    tailscale_ip="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$tailscale_ip" ]]; then
+      printf '%s' "$tailscale_ip"
+      return 0
+    fi
+  fi
+
+  local host_ip
+  host_ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  if [[ -n "$host_ip" ]]; then
+    printf '%s' "$host_ip"
+    return 0
+  fi
+
+  return 1
+}
+
+tcp_port_open() {
+  local port="$1"
+  timeout 1 bash -c ":</dev/tcp/127.0.0.1/$port" >/dev/null 2>&1
+}
+
+print_rerun_live_links() {
+  local web_port="$1"
+  local grpc_port="$2"
+  local viewer_host
+
+  if viewer_host="$(detect_viewer_host)"; then
+    echo
+    echo "Live Rerun stream:"
+    echo "  Open on your MacBook: http://$viewer_host:$web_port?url=rerun%2Bhttp%3A%2F%2F$viewer_host%3A$grpc_port%2Fproxy"
+    echo "  Native Rerun viewer: rerun rerun+http://$viewer_host:$grpc_port/proxy"
+  else
+    echo
+    echo "Live Rerun stream is enabled, but this machine's IP could not be auto-detected."
+    echo "Set it explicitly, for example: RERUN_HOST=<tailscale-ip> make record $TASK"
+  fi
+}
+
+stop_rerun_live_server() {
+  if [[ -n "${RERUN_SERVER_PID:-}" ]] && kill -0 "$RERUN_SERVER_PID" >/dev/null 2>&1; then
+    kill "$RERUN_SERVER_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+setup_live_display() {
+  if ! truthy "$DISPLAY_DATA"; then
+    return 0
+  fi
+
+  if [[ -n "$DISPLAY_IP" && -n "$DISPLAY_PORT" ]]; then
+    print_rerun_live_links "${RERUN_WEB_PORT:-9090}" "$DISPLAY_PORT"
+    return 0
+  fi
+
+  if ! truthy "$RERUN_LIVE_VIEW"; then
+    return 0
+  fi
+
+  if ! command -v rerun >/dev/null 2>&1; then
+    echo "DISPLAY_DATA=true, but rerun is not installed."
+    echo "Set DISPLAY_DATA=false or install LeRobot visualization dependencies."
+    exit 1
+  fi
+
+  DISPLAY_IP="127.0.0.1"
+  DISPLAY_PORT="$RERUN_GRPC_PORT"
+  export DISPLAY_IP DISPLAY_PORT
+
+  print_rerun_live_links "$RERUN_WEB_PORT" "$RERUN_GRPC_PORT"
+
+  if tcp_port_open "$RERUN_WEB_PORT" || tcp_port_open "$RERUN_GRPC_PORT"; then
+    echo "Using existing Rerun server on web port $RERUN_WEB_PORT / gRPC port $RERUN_GRPC_PORT."
+    return 0
+  fi
+
+  local log_file="/tmp/lerobot-rerun-live-${RERUN_WEB_PORT}-${RERUN_GRPC_PORT}.log"
+  local cmd=(
+    rerun
+    --serve-web
+    --bind 0.0.0.0
+    --port "$RERUN_GRPC_PORT"
+    --web-viewer-port "$RERUN_WEB_PORT"
+    --server-memory-limit "$RERUN_SERVER_MEMORY_LIMIT"
+  )
+
+  print_command "${cmd[@]}"
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    echo "DRY_RUN=true, not starting Rerun server."
+    return 0
+  fi
+
+  "${cmd[@]}" >"$log_file" 2>&1 &
+  RERUN_SERVER_PID="$!"
+  trap stop_rerun_live_server EXIT
+  sleep 2
+
+  if ! kill -0 "$RERUN_SERVER_PID" >/dev/null 2>&1; then
+    echo "Rerun live server failed to start. Log:"
+    tail -50 "$log_file" || true
+    exit 1
+  fi
+}
+
+add_display_args() {
+  local -n cmd_ref="$1"
+  cmd_ref+=(--display_data="$DISPLAY_DATA")
+  append_arg_if_set "$1" "--display_ip" "${DISPLAY_IP:-}"
+  append_arg_if_set "$1" "--display_port" "${DISPLAY_PORT:-}"
+  append_arg_if_set "$1" "--display_compressed_images" "${DISPLAY_COMPRESSED_IMAGES:-}"
+}
+
 print_command() {
   printf 'Command:'
   printf ' %q' "$@"
@@ -216,18 +425,36 @@ run_command() {
 
 print_camera_summary() {
   echo "Cameras:"
-  printf '  %-10s index_or_path=%s width=%s height=%s fps=%s\n' \
-    "wrist" "$WRIST_CAMERA_INDEX" "$WRIST_CAMERA_WIDTH" "$WRIST_CAMERA_HEIGHT" "$WRIST_CAMERA_FPS"
-  printf '  %-10s index_or_path=%s width=%s height=%s fps=%s\n' \
-    "zed_left" "$ZED_LEFT_CAMERA_INDEX" "$ZED_LEFT_CAMERA_WIDTH" "$ZED_LEFT_CAMERA_HEIGHT" "$ZED_LEFT_CAMERA_FPS"
-  printf '  %-10s index_or_path=%s width=%s height=%s fps=%s\n' \
-    "zed_right" "$ZED_RIGHT_CAMERA_INDEX" "$ZED_RIGHT_CAMERA_WIDTH" "$ZED_RIGHT_CAMERA_HEIGHT" "$ZED_RIGHT_CAMERA_FPS"
+  print_camera_line "wrist" WRIST
+  print_camera_line "zed_left" ZED_LEFT
+  print_camera_line "zed_right" ZED_RIGHT
+}
+
+print_camera_line() {
+  local label="$1"
+  local prefix="$2"
+  local type width height fps
+  type="$(camera_value "$prefix" TYPE opencv)"
+  width="$(camera_value "$prefix" WIDTH "${CAMERA_WIDTH:-}")"
+  height="$(camera_value "$prefix" HEIGHT "${CAMERA_HEIGHT:-}")"
+  fps="$(camera_value "$prefix" FPS "${CAMERA_FPS:-}")"
+
+  if [[ "$type" == "opencv" ]]; then
+    printf '  %-10s type=%s index_or_path=%s width=%s height=%s fps=%s\n' \
+      "$label" "$type" "$(camera_value "$prefix" INDEX)" "$width" "$height" "$fps"
+  elif [[ "$type" == "zed_sdk" ]]; then
+    printf '  %-10s type=%s side=%s serial_number=%s width=%s height=%s fps=%s\n' \
+      "$label" "$type" "$(camera_value "$prefix" SIDE)" "${ZED_CAMERA_SERIAL_NUMBER:-default}" "$width" "$height" "$fps"
+  else
+    printf '  %-10s type=%s width=%s height=%s fps=%s\n' "$label" "$type" "$width" "$height" "$fps"
+  fi
 }
 
 print_summary() {
   echo "Config: $CONFIG_FILE"
   if [[ -n "$TASK" ]]; then
     echo "Task:   $TASK ($TASK_CONFIG_FILE)"
+    echo "Task text: $TASK_DESCRIPTION"
     echo "Policy type: $POLICY_TYPE"
     echo "Policy config: $POLICY_CONFIG_FILE"
     echo "Dataset repo: $DATASET_REPO_ID"

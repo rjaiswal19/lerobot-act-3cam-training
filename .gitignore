@@ -2,11 +2,13 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 
 # LeRobot / training outputs
 outputs/
 external/
 wandb/
+ZED_Diagnostic_Results.json
 
 # Local secrets if you add any later
 .env
