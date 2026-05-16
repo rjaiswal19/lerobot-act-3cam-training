@@ -15,6 +15,17 @@ count_completed_episodes() {
   python "$ROOT_DIR/scripts/count_dataset_episodes.py" "$LOCAL_DATASET_DIR"
 }
 
+flush_pending_input() {
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+
+  local _
+  while IFS= read -r -s -t 0.05 -n 1 _; do
+    :
+  done
+}
+
 dataset_fps() {
   local dataset_dir="$1"
   python - "$dataset_dir" <<'PY'
@@ -99,6 +110,7 @@ echo
 while (( completed < NUM_EPISODES )); do
   next_episode=$((completed + 1))
 
+  flush_pending_input
   printf 'Press Enter to record episode %d/%d, or type q then Enter to stop: ' "$next_episode" "$NUM_EPISODES"
   read -r answer
   case "$answer" in
