@@ -6,6 +6,11 @@ CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/configs/local.env}"
 PRIVATE_ENV_FILE="${PRIVATE_ENV_FILE:-$ROOT_DIR/.env}"
 TASK="${TASK:-}"
 TASK_CONFIG_FILE=""
+
+if [[ -d "$ROOT_DIR/.venv/bin" ]]; then
+  PATH="$ROOT_DIR/.venv/bin:$PATH"
+  export PATH
+fi
 OVERRIDE_POLICY_DEVICE="${POLICY_DEVICE:-}"
 OVERRIDE_POLICY_TYPE="${POLICY_TYPE:-}"
 OVERRIDE_RECORD_RESUME="${RECORD_RESUME:-}"
@@ -152,6 +157,63 @@ camera_spec() {
     "$ZED_RIGHT_CAMERA_INDEX" "$ZED_RIGHT_CAMERA_WIDTH" "$ZED_RIGHT_CAMERA_HEIGHT" "$ZED_RIGHT_CAMERA_FPS"
 }
 
+append_arg_if_set() {
+  local -n cmd_ref="$1"
+  local flag="$2"
+  local value="${3:-}"
+  if [[ -n "$value" ]]; then
+    cmd_ref+=("$flag=$value")
+  fi
+}
+
+add_robot_args() {
+  local -n cmd_ref="$1"
+  local include_cameras="${2:-true}"
+
+  cmd_ref+=(
+    --robot.type="$ROBOT_TYPE"
+    --robot.port="$ROBOT_PORT"
+    --robot.id="$ROBOT_ID"
+  )
+  append_arg_if_set "$1" "--robot.can_adapter" "${ROBOT_CAN_ADAPTER:-}"
+  append_arg_if_set "$1" "--robot.dm_serial_baud" "${ROBOT_DM_SERIAL_BAUD:-}"
+
+  if [[ "$include_cameras" == "true" ]]; then
+    cmd_ref+=(--robot.cameras="$(camera_spec)")
+  fi
+}
+
+add_teleop_args() {
+  local -n cmd_ref="$1"
+  local include_optional="${2:-true}"
+
+  cmd_ref+=(
+    --teleop.type="$TELEOP_TYPE"
+    --teleop.port="$TELEOP_PORT"
+    --teleop.id="$TELEOP_ID"
+  )
+  if [[ "$include_optional" == "true" ]]; then
+    append_arg_if_set "$1" "--teleop.can_adapter" "${TELEOP_CAN_ADAPTER:-}"
+    append_arg_if_set "$1" "--teleop.joint_directions" "${TELEOP_JOINT_DIRECTIONS:-}"
+    append_arg_if_set "$1" "--teleop.baudrate" "${TELEOP_BAUDRATE:-}"
+  fi
+}
+
+print_command() {
+  printf 'Command:'
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+run_command() {
+  print_command "$@"
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    echo "DRY_RUN=true, not executing command."
+    return 0
+  fi
+  "$@"
+}
+
 print_camera_summary() {
   echo "Cameras:"
   printf '  %-10s index_or_path=%s width=%s height=%s fps=%s\n' \
@@ -174,7 +236,19 @@ print_summary() {
     echo "Task:   none selected"
   fi
   echo "Robot:        $ROBOT_TYPE at $ROBOT_PORT id=$ROBOT_ID"
+  if [[ -n "${ROBOT_CAN_ADAPTER:-}" ]]; then
+    echo "  can_adapter=$ROBOT_CAN_ADAPTER"
+  fi
+  if [[ -n "${ROBOT_DM_SERIAL_BAUD:-}" ]]; then
+    echo "  dm_serial_baud=$ROBOT_DM_SERIAL_BAUD"
+  fi
   echo "Teleop:       $TELEOP_TYPE at $TELEOP_PORT id=$TELEOP_ID"
+  if [[ -n "${TELEOP_CAN_ADAPTER:-}" ]]; then
+    echo "  can_adapter=$TELEOP_CAN_ADAPTER"
+  fi
+  if [[ -n "${TELEOP_JOINT_DIRECTIONS:-}" ]]; then
+    echo "  joint_directions=$TELEOP_JOINT_DIRECTIONS"
+  fi
   print_camera_summary
   echo "Training:"
   echo "  policy_type=$POLICY_TYPE"

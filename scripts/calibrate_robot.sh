@@ -8,17 +8,15 @@ target="${1:-}"
 case "$target" in
   follower)
     require_robot
-    lerobot-calibrate \
-      --robot.type="$ROBOT_TYPE" \
-      --robot.port="$ROBOT_PORT" \
-      --robot.id="$ROBOT_ID"
+    cmd=(lerobot-calibrate)
+    add_robot_args cmd false
+    run_command "${cmd[@]}"
     ;;
   leader)
     require_teleop
-    lerobot-calibrate \
-      --teleop.type="$TELEOP_TYPE" \
-      --teleop.port="$TELEOP_PORT" \
-      --teleop.id="$TELEOP_ID"
+    cmd=(lerobot-calibrate)
+    add_teleop_args cmd false
+    run_command "${cmd[@]}"
     ;;
   *)
     echo "Usage: bash scripts/calibrate_robot.sh follower|leader"

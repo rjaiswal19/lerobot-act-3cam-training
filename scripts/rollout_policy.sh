@@ -9,11 +9,12 @@ require_robot
 
 print_summary
 
-lerobot-rollout \
-  --strategy.type=base \
-  --policy.path="$POLICY_REPO_ID" \
-  --robot.type="$ROBOT_TYPE" \
-  --robot.port="$ROBOT_PORT" \
-  --robot.id="$ROBOT_ID" \
-  --robot.cameras="$(camera_spec)" \
+cmd=(
+  lerobot-rollout
+  --strategy.type=base
+  --policy.path="$POLICY_REPO_ID"
   --display_data="$DISPLAY_DATA"
+)
+add_robot_args cmd true
+
+run_command "${cmd[@]}"

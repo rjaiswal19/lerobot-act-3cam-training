@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/python_deps.sh"
 LEROBOT_DIR="$ROOT_DIR/external/lerobot"
 
 if [[ ! -d "$LEROBOT_DIR" ]]; then
@@ -10,4 +11,4 @@ if [[ ! -d "$LEROBOT_DIR" ]]; then
   exit 1
 fi
 
-python -m pip install -e "$LEROBOT_DIR[pi]"
+python_install -e "$LEROBOT_DIR[pi]"

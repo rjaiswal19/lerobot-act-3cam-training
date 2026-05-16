@@ -8,12 +8,9 @@ require_teleop
 
 print_summary
 
-lerobot-teleoperate \
-  --robot.type="$ROBOT_TYPE" \
-  --robot.port="$ROBOT_PORT" \
-  --robot.id="$ROBOT_ID" \
-  --robot.cameras="$(camera_spec)" \
-  --teleop.type="$TELEOP_TYPE" \
-  --teleop.port="$TELEOP_PORT" \
-  --teleop.id="$TELEOP_ID" \
-  --display_data="$DISPLAY_DATA"
+cmd=(lerobot-teleoperate)
+add_robot_args cmd true
+add_teleop_args cmd
+cmd+=(--display_data="$DISPLAY_DATA")
+
+run_command "${cmd[@]}"
