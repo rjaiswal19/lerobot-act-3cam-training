@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -73,6 +74,7 @@ class _ZedSession:
         self._mats: dict[str, Any] = {}
         self._frames: dict[str, NDArray[np.uint8]] = {}
         self._fresh_sides: set[str] = set()
+        self._postprocess_executor: ThreadPoolExecutor | None = None
         self._latest_t = 0.0
 
     @property
@@ -106,10 +108,16 @@ class _ZedSession:
             self._mats = {"left": sl.Mat(), "right": sl.Mat()}
             self._frames = {}
             self._fresh_sides = set()
+            self._postprocess_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="zed-post")
 
             warmup_deadline = time.perf_counter() + max(self.config.warmup_s, 0.0)
             while time.perf_counter() < warmup_deadline:
-                self._grab_locked(timeout_ms=self.config.timeout_ms)
+                self._grab_locked(
+                    timeout_ms=self.config.timeout_ms,
+                    color_mode=self.config.color_mode,
+                    width=self.config.width,
+                    height=self.config.height,
+                )
 
             logger.info("Connected ZED SDK camera %s", self.key)
 
@@ -123,16 +131,48 @@ class _ZedSession:
         with self._lock:
             if self._camera is not None:
                 self._camera.close()
+            if self._postprocess_executor is not None:
+                self._postprocess_executor.shutdown(wait=True)
             self._camera = None
             self._runtime = None
             self._mats = {}
             self._frames = {}
             self._fresh_sides = set()
+            self._postprocess_executor = None
             self._latest_t = 0.0
 
-    def _grab_locked(self, timeout_ms: int) -> None:
+    @staticmethod
+    def _prepare_frame(
+        frame: NDArray[np.uint8],
+        color_mode: ColorMode,
+        width: int | None,
+        height: int | None,
+    ) -> NDArray[np.uint8]:
+        if frame.shape[2] == 4:
+            frame = frame[:, :, :3]
+
+        if color_mode == ColorMode.RGB:
+            frame = frame[:, :, ::-1]
+
+        if height is not None and width is not None and frame.shape[:2] != (height, width):
+            import cv2  # type: ignore[import-not-found]
+
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+
+        frame = np.ascontiguousarray(frame)
+        return frame if frame.flags.owndata else frame.copy()
+
+    def _grab_locked(
+        self,
+        timeout_ms: int,
+        color_mode: ColorMode,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> None:
         if self._camera is None or self._runtime is None or self._sl is None:
             raise DeviceNotConnectedError("ZED SDK camera is not connected.")
+        if self._postprocess_executor is None:
+            raise DeviceNotConnectedError("ZED SDK postprocess executor is not available.")
 
         deadline = time.perf_counter() + timeout_ms / 1000.0
         last_status = None
@@ -144,12 +184,26 @@ class _ZedSession:
         else:
             raise TimeoutError(f"Timed out waiting for ZED SDK frame: {last_status}")
 
-        self._camera.retrieve_image(self._mats["left"], self._sl.VIEW.LEFT)
-        self._camera.retrieve_image(self._mats["right"], self._sl.VIEW.RIGHT)
-        self._frames = {
-            "left": self._mats["left"].get_data().copy(),
-            "right": self._mats["right"].get_data().copy(),
-        }
+        if width is not None and height is not None:
+            retrieve_resolution = self._sl.Resolution(int(width), int(height))
+            self._camera.retrieve_image(
+                self._mats["left"], self._sl.VIEW.LEFT_BGR, self._sl.MEM.CPU, retrieve_resolution
+            )
+            self._camera.retrieve_image(
+                self._mats["right"], self._sl.VIEW.RIGHT_BGR, self._sl.MEM.CPU, retrieve_resolution
+            )
+        else:
+            self._camera.retrieve_image(self._mats["left"], self._sl.VIEW.LEFT_BGR)
+            self._camera.retrieve_image(self._mats["right"], self._sl.VIEW.RIGHT_BGR)
+        left_raw = self._mats["left"].get_data(deep_copy=False)
+        right_raw = self._mats["right"].get_data(deep_copy=False)
+        left_future = self._postprocess_executor.submit(
+            self._prepare_frame, left_raw, color_mode, width, height
+        )
+        right_future = self._postprocess_executor.submit(
+            self._prepare_frame, right_raw, color_mode, width, height
+        )
+        self._frames = {"left": left_future.result(), "right": right_future.result()}
         self._fresh_sides = {"left", "right"}
         self._latest_t = time.perf_counter()
 
@@ -163,23 +217,10 @@ class _ZedSession:
     ) -> NDArray[np.uint8]:
         with self._lock:
             if side not in self._fresh_sides:
-                self._grab_locked(timeout_ms=timeout_ms)
+                self._grab_locked(timeout_ms=timeout_ms, color_mode=color_mode, width=width, height=height)
 
             self._fresh_sides.discard(side)
-            frame = self._frames[side]
-
-            if frame.shape[2] == 4:
-                frame = frame[:, :, :3]
-
-            if color_mode == ColorMode.RGB:
-                frame = frame[:, :, ::-1]
-
-            if height is not None and width is not None and frame.shape[:2] != (height, width):
-                import cv2  # type: ignore[import-not-found]
-
-                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
-
-            return np.ascontiguousarray(frame)
+            return self._frames[side]
 
 
 class ZedSdkCamera(Camera):

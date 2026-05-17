@@ -5,6 +5,8 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project_python() {
   if [[ -n "${PYTHON:-}" ]]; then
     printf '%s\n' "$PYTHON"
+  elif [[ -n "${VENV_DIR:-}" && -x "$VENV_DIR/bin/python" ]]; then
+    printf '%s\n' "$VENV_DIR/bin/python"
   elif [[ -x "$PROJECT_ROOT/.venv/bin/python" ]]; then
     printf '%s\n' "$PROJECT_ROOT/.venv/bin/python"
   else

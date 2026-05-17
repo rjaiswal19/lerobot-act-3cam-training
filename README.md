@@ -88,11 +88,22 @@ configs/local.env
 
 The file contains shared hardware, recording, and training defaults for the 3-camera setup.
 
+Local runtime fixes for the external LeRobot checkout are tracked as:
+
+```text
+patches/lerobot/local-runtime-fixes.patch
+```
+
+`make init` applies this patch after cloning `external/lerobot`.
+
 Task-specific dataset names and task descriptions live in:
 
 ```text
 configs/tasks/pour.env
 configs/tasks/swirl.env
+configs/tasks/pour_blue_to_green.env
+configs/tasks/pour_yellow_to_green.env
+configs/tasks/swirl_green_beaker.env
 ```
 
 Policy-specific training defaults live in:
@@ -138,13 +149,16 @@ make teleop pour
 make record pour
 make record swirl
 
-# These are interactive: press Enter before each next episode.
-# Continue a partially recorded dataset the same way.
+# This prompts before each episode while cameras/robot stay connected.
+# Continue a partially recorded dataset with resume.
 make resume pour
 make resume swirl
 
-# Optional old behavior: run continuously with fixed RESET_TIME_S.
+# Fully automatic mode: fixed RESET_TIME_S between episodes, no prompt.
 make record-fixed pour
+
+# Old behavior: prompt before each episode and reconnect each time.
+make record-interactive pour
 ```
 
 5. Train the selected policy:
@@ -161,11 +175,116 @@ make rollout pour
 make rollout swirl
 ```
 
+## Autonomous Chemist Demo
+
+The chemist demo composes Pi0.5 short-horizon skills for a single-arm setup:
+
+1. pour the blue beaker into the green beaker
+2. verify
+3. pour the yellow beaker into the green beaker
+4. verify
+5. swirl the green beaker
+6. verify
+
+Record and train each color-specific skill with Pi0.5:
+
+```bash
+make install-pi
+
+POLICY_TYPE=pi05 make record pour_blue_to_green
+POLICY_TYPE=pi05 make record pour_yellow_to_green
+POLICY_TYPE=pi05 make record swirl_green_beaker
+
+POLICY_TYPE=pi05 make train pour_blue_to_green
+POLICY_TYPE=pi05 make train pour_yellow_to_green
+POLICY_TYPE=pi05 make train swirl_green_beaker
+```
+
+Dry-run the full plan before moving the robot:
+
+```bash
+make chemist-demo-dry-run
+```
+
+### Pi0.5 Base Zero-Shot Handoff
+
+For colored-water plumbing checks, the downloaded `lerobot/pi05_base`
+checkpoint can be loaded in dry-run mode. These commands use hardcoded color
+prompts and the back-left corner of the white pad from the robot's perspective:
+
+```bash
+make zero-shot-handoff-blue-dry-run
+make zero-shot-handoff-yellow-dry-run
+make zero-shot-handoff-green-dry-run
+```
+
+Zero-shot Pi0.5 base uses `sync` inference and a camera rename map in:
+
+```text
+configs/demos/zero_shot_handoff.env
+```
+
+On Jetson Orin, the Pi0.5 rollout scripts prefer `.venv-pi05-jetson` when it
+exists. That env uses the Jetson CUDA 12.6 Python 3.10 torch wheel (`sm_87`)
+instead of generic PyPI CUDA wheels, which do not include Orin kernels.
+
+To avoid reloading Pi0.5 for every short-horizon task, run the async policy
+server once in one terminal:
+
+```bash
+make pi05-policy-server
+```
+
+Then run short client tasks from another terminal:
+
+```bash
+make zero-shot-handoff-blue-async-dry-run
+```
+
+The policy server keeps the loaded model/processors cached and reuses them
+when the next client uses the same model, device, features, and camera rename
+map.
+
+Do not run `lerobot/pi05_base` directly on the physical B601 arm. The base model
+emits a 32-dimensional action vector, while the B601 follower expects 7 absolute
+joint targets in degrees. The rollout path now refuses that implicit first-N
+mapping. Use a B601-finetuned checkpoint or a verified robot-specific action
+transform before physical execution. See:
+
+```text
+docs/PI05_B601_MAPPING_NOTES.md
+```
+
+Run the physical demo with manual verification gates:
+
+```bash
+make chemist-demo
+```
+
+The planner defaults are in:
+
+```text
+configs/demos/chemist_mix.env
+```
+
+By default, `CHEMIST_PLANNER_MODE=auto`: if `OPENAI_API_KEY` is available,
+the planner uses an LLM to choose the next allowed skill; otherwise it falls
+back to the fixed safe single-arm order. The LLM is constrained to known skill
+IDs only. It never outputs joint commands.
+
+For first trials, keep `CHEMIST_VERIFY_MODE=manual`. To test the loop without
+prompts:
+
+```bash
+CHEMIST_VERIFY_MODE=none bash scripts/run_chemist_demo.sh --dry-run
+```
+
 You can inspect the resolved config before running anything:
 
 ```bash
 make config pour
 make config swirl
+POLICY_TYPE=pi05 make config pour_blue_to_green
 ```
 
 ## Values You Need To Fill
@@ -195,7 +314,7 @@ Check these defaults:
 - `CAMERA_FPS=30`
 - `NUM_EPISODES=50`
 - `EPISODE_TIME_S=60`
-- `RESET_TIME_S=20`, only used by `make record-fixed`
+- `RESET_TIME_S=20`, used by automatic `make record-fixed`; manual `make record` waits for Enter instead
 - `RECORD_RESUME=false`
 - `POLICY_TYPE=act`
 - `POLICY_DEVICE=cuda`
@@ -329,24 +448,30 @@ POLICY_DEVICE="cuda:1" make train pour
 
 If your ZED appears as one side-by-side OpenCV stream instead of separate left/right camera IDs, this scaffold needs a small custom camera adapter or a preprocessing split step. Start by running `bash scripts/find_cameras.sh` and send me the output.
 
-Normal recording is interactive:
+Normal recording prompts before each episode and keeps cameras connected:
 
 ```bash
 make record pour
 ```
 
-It waits for Enter before each episode, records one episode, then returns to the prompt. The next episode number is computed from the local dataset metadata and increments automatically.
+It starts one `lerobot-record` process, connects cameras, ZED, robot, and leader once, then waits for Enter before each episode. Type `q` then Enter at the prompt to stop without disconnect/reconnect churn.
 
-If you stop after some completed episodes and want to continue later, run the same command:
-
-```bash
-make record pour
-```
-
-or:
+If you stop after some completed episodes and want to continue later, run:
 
 ```bash
 make resume pour
+```
+
+If you want fixed automatic timing between episodes, run:
+
+```bash
+make record-fixed pour
+```
+
+If you want the old prompt-per-episode mode that reconnects each time, run:
+
+```bash
+make record-interactive pour
 ```
 
 Both resume the same dataset instead of starting from episode 1 again.

@@ -1,0 +1,918 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index f983134a..8f10df5e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -29,7 +29,7 @@ version = "0.5.2"
+ description = "🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch"
+ dynamic = ["readme"]
+ license = { text = "Apache-2.0" }
+-requires-python = ">=3.12"
++requires-python = ">=3.10"
+ authors = [
+     { name = "Rémi Cadène", email = "re.cadene@gmail.com" },
+     { name = "Simon Alibert", email = "alibert.sim@gmail.com" },
+@@ -50,6 +50,7 @@ classifiers = [
+     "Intended Audience :: Education",
+     "Intended Audience :: Science/Research",
+     "License :: OSI Approved :: Apache Software License",
++    "Programming Language :: Python :: 3.10",
+     "Programming Language :: Python :: 3.12",
+     "Programming Language :: Python :: 3.13",
+     "Topic :: Software Development :: Build Tools",
+diff --git a/src/lerobot/async_inference/configs.py b/src/lerobot/async_inference/configs.py
+index 2e3fe576..1dadf31f 100644
+--- a/src/lerobot/async_inference/configs.py
++++ b/src/lerobot/async_inference/configs.py
+@@ -118,6 +118,21 @@ class RobotClientConfig:
+     # would be aggregated on the client side anyway, depending on the value of `chunk_size_threshold`)
+     actions_per_chunk: int = field(metadata={"help": "Number of actions per chunk"})
+ 
++    # Mapping from robot/dataset observation keys to the policy's expected keys.
++    rename_map: dict[str, str] = field(
++        default_factory=dict,
++        metadata={"help": "Observation key rename map, e.g. camera names expected by a pretrained policy"},
++    )
++    action_index_map: dict[str, int] = field(
++        default_factory=dict,
++        metadata={
++            "help": (
++                "Explicit mapping from robot action feature names to policy action tensor indices. "
++                "Leave empty to require policy action dimensionality to exactly match the robot."
++            )
++        },
++    )
++
+     # Task instruction for the robot to execute (e.g., 'fold my tshirt')
+     task: str = field(default="", metadata={"help": "Task instruction for the robot to execute"})
+ 
+@@ -148,6 +163,29 @@ class RobotClientConfig:
+         default=False, metadata={"help": "Visualize the action queue size"}
+     )
+ 
++    # Optional bounded run support for short-horizon physical skills.
++    run_duration_s: float = field(
++        default=0.0,
++        metadata={"help": "Stop the client after this many seconds; 0 means run until interrupted"},
++    )
++    run_duration_starts_on_first_action: bool = field(
++        default=False,
++        metadata={
++            "help": (
++                "When true, extend the run deadline so run_duration_s counts from the first executed "
++                "action instead of from control-loop startup."
++            )
++        },
++    )
++    return_to_initial_position: bool = field(
++        default=False,
++        metadata={"help": "Return the robot to the joint positions observed at client startup"},
++    )
++    return_to_initial_duration_s: float = field(
++        default=2.0,
++        metadata={"help": "Duration for interpolated return-to-initial motion"},
++    )
++
+     @property
+     def environment_dt(self) -> float:
+         """Environment time step, in seconds"""
+@@ -179,6 +217,23 @@ class RobotClientConfig:
+         if self.actions_per_chunk <= 0:
+             raise ValueError(f"actions_per_chunk must be positive, got {self.actions_per_chunk}")
+ 
++        if self.run_duration_s < 0:
++            raise ValueError(f"run_duration_s must be non-negative, got {self.run_duration_s}")
++
++        for action_name, action_index in self.action_index_map.items():
++            if not isinstance(action_name, str) or not action_name:
++                raise ValueError(f"action_index_map keys must be non-empty strings, got {action_name!r}")
++            if not isinstance(action_index, int) or action_index < 0:
++                raise ValueError(
++                    f"action_index_map values must be non-negative integer indices, got "
++                    f"{action_name!r}: {action_index!r}"
++                )
++
++        if self.return_to_initial_duration_s <= 0:
++            raise ValueError(
++                f"return_to_initial_duration_s must be positive, got {self.return_to_initial_duration_s}"
++            )
++
+         self.aggregate_fn = get_aggregate_function(self.aggregate_fn_name)
+ 
+     @classmethod
+@@ -197,7 +252,13 @@ class RobotClientConfig:
+             "chunk_size_threshold": self.chunk_size_threshold,
+             "fps": self.fps,
+             "actions_per_chunk": self.actions_per_chunk,
++            "rename_map": self.rename_map,
++            "action_index_map": self.action_index_map,
+             "task": self.task,
+             "debug_visualize_queue_size": self.debug_visualize_queue_size,
+             "aggregate_fn_name": self.aggregate_fn_name,
++            "run_duration_s": self.run_duration_s,
++            "run_duration_starts_on_first_action": self.run_duration_starts_on_first_action,
++            "return_to_initial_position": self.return_to_initial_position,
++            "return_to_initial_duration_s": self.return_to_initial_duration_s,
+         }
+diff --git a/src/lerobot/async_inference/helpers.py b/src/lerobot/async_inference/helpers.py
+index 4931c68c..3f157c45 100644
+--- a/src/lerobot/async_inference/helpers.py
++++ b/src/lerobot/async_inference/helpers.py
+@@ -89,10 +89,13 @@ def raw_observation_to_observation(
+     raw_observation: RawObservation,
+     lerobot_features: dict[str, dict],
+     policy_image_features: dict[str, PolicyFeature],
++    rename_map: dict[str, str] | None = None,
+ ) -> Observation:
+     observation = {}
+ 
+-    observation = prepare_raw_observation(raw_observation, lerobot_features, policy_image_features)
++    observation = prepare_raw_observation(
++        raw_observation, lerobot_features, policy_image_features, rename_map=rename_map
++    )
+     for k, v in observation.items():
+         if isinstance(v, torch.Tensor):  # VLAs present natural-language instructions in observations
+             if "image" in k:
+@@ -144,6 +147,7 @@ def prepare_raw_observation(
+     robot_obs: RawObservation,
+     lerobot_features: dict[str, dict],
+     policy_image_features: dict[str, PolicyFeature],
++    rename_map: dict[str, str] | None = None,
+ ) -> Observation:
+     """Matches keys from the raw robot_obs dict to the keys expected by a given policy (passed as
+     policy_image_features)."""
+@@ -159,10 +163,15 @@ def prepare_raw_observation(
+         image_k: extract_images_from_raw_observation(lerobot_obs, image_k) for image_k in image_keys
+     }
+ 
++    rename_map = rename_map or {}
++
+     # Turns the image features to (C, H, W) with H, W matching the policy image features.
+-    # This reduces the resolution of the images
++    # The observation key stays in robot space here; the policy preprocessor applies
++    # the actual rename after resizing.
+     image_dict = {
+-        key: resize_robot_observation_image(torch.tensor(lerobot_obs[key]), policy_image_features[key].shape)
++        key: resize_robot_observation_image(
++            torch.tensor(lerobot_obs[key]), policy_image_features[rename_map.get(key, key)].shape
++        )
+         for key in image_keys
+     }
+ 
+diff --git a/src/lerobot/async_inference/policy_server.py b/src/lerobot/async_inference/policy_server.py
+index 787d39ab..631ccec4 100644
+--- a/src/lerobot/async_inference/policy_server.py
++++ b/src/lerobot/async_inference/policy_server.py
+@@ -25,11 +25,12 @@ python -m lerobot.async_inference.policy_server \
+ """
+ 
+ import logging
++import os
+ import pickle  # nosec
+ import threading
+ import time
+ from concurrent import futures
+-from dataclasses import asdict
++from dataclasses import asdict, is_dataclass
+ from pprint import pformat
+ from queue import Empty, Queue
+ from typing import Any
+@@ -38,6 +39,7 @@ import draccus
+ import grpc
+ import torch
+ 
++from lerobot.configs import PreTrainedConfig
+ from lerobot.policies import get_policy_class, make_pre_post_processors
+ from lerobot.processor import PolicyProcessorPipeline
+ from lerobot.transport import (
+@@ -87,6 +89,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
+         self.policy = None
+         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
+         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
++        self.rename_map: dict[str, str] = {}
++        self.policy_dtype_override: str | None = None
++        self._loaded_policy_cache_key = None
+ 
+     @property
+     def running(self):
+@@ -105,6 +110,44 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
+         with self._predicted_timesteps_lock:
+             self._predicted_timesteps = set()
+ 
++        self.last_processed_obs = None
++
++    def _freeze_for_cache(self, value: Any) -> Any:
++        """Convert nested dataclasses/dicts/lists into a stable, hashable cache key."""
++        if is_dataclass(value):
++            value = asdict(value)
++        if isinstance(value, dict):
++            return tuple(sorted((str(k), self._freeze_for_cache(v)) for k, v in value.items()))
++        if isinstance(value, (list, tuple)):
++            return tuple(self._freeze_for_cache(v) for v in value)
++        if hasattr(value, "value"):
++            return value.value
++        return value
++
++    def _policy_cache_key(self, policy_specs: RemotePolicyConfig) -> tuple[Any, ...]:
++        return (
++            policy_specs.policy_type,
++            policy_specs.pretrained_name_or_path,
++            policy_specs.device,
++            policy_specs.actions_per_chunk,
++            self.policy_dtype_override,
++            self._freeze_for_cache(policy_specs.rename_map),
++            self._freeze_for_cache(policy_specs.lerobot_features),
++        )
++
++    def _reset_policy_runtime_state(self) -> None:
++        for obj_name, obj in (
++            ("policy", self.policy),
++            ("preprocessor", self.preprocessor),
++            ("postprocessor", self.postprocessor),
++        ):
++            reset = getattr(obj, "reset", None)
++            if callable(reset):
++                try:
++                    reset()
++                except Exception as exc:
++                    self.logger.warning("Failed to reset %s runtime state: %r", obj_name, exc)
++
+     def Ready(self, request, context):  # noqa: N802
+         client_id = context.peer()
+         self.logger.info(f"Client {client_id} connected and ready")
+@@ -145,12 +188,47 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
+         self.policy_type = policy_specs.policy_type  # act, pi0, etc.
+         self.lerobot_features = policy_specs.lerobot_features
+         self.actions_per_chunk = policy_specs.actions_per_chunk
++        self.rename_map = policy_specs.rename_map
++        self.policy_dtype_override = (
++            os.environ.get("PI05_POLICY_DTYPE") if self.policy_type == "pi05" else None
++        ) or os.environ.get("POLICY_SERVER_DTYPE")
+ 
+-        policy_class = get_policy_class(self.policy_type)
++        cache_key = self._policy_cache_key(policy_specs)
++        if (
++            self._loaded_policy_cache_key == cache_key
++            and self.policy is not None
++            and self.preprocessor is not None
++            and self.postprocessor is not None
++        ):
++            self._reset_policy_runtime_state()
++            self.logger.info(
++                "Reusing cached policy on %s: type=%s path=%s",
++                self.device,
++                self.policy_type,
++                policy_specs.pretrained_name_or_path,
++            )
++            return services_pb2.Empty()
+ 
+         start = time.perf_counter()
+-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
++        policy_class = get_policy_class(self.policy_type)
++        policy_config = None
++        if self.policy_dtype_override:
++            policy_config = PreTrainedConfig.from_pretrained(policy_specs.pretrained_name_or_path)
++            if not hasattr(policy_config, "dtype"):
++                raise ValueError(
++                    f"Policy type {self.policy_type} does not support dtype override "
++                    f"{self.policy_dtype_override!r}"
++                )
++            policy_config.dtype = self.policy_dtype_override
++            policy_config.device = self.device
++            self.logger.info(
++                "Overriding policy dtype for server load: type=%s dtype=%s",
++                self.policy_type,
++                self.policy_dtype_override,
++            )
++        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path, config=policy_config)
+         self.policy.to(self.device)
++        self.policy.eval()
+ 
+         # Load preprocessor and postprocessor, overriding device to match requested device
+         device_override = {"device": self.device}
+@@ -165,6 +243,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
+         )
+ 
+         end = time.perf_counter()
++        self._loaded_policy_cache_key = cache_key
++        self._reset_policy_runtime_state()
+ 
+         self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
+ 
+@@ -343,6 +423,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
+             observation_t.get_observation(),
+             self.lerobot_features,
+             self.policy_image_features,
++            rename_map=self.rename_map,
+         )
+         prepare_time = time.perf_counter() - start_prepare
+ 
+diff --git a/src/lerobot/async_inference/robot_client.py b/src/lerobot/async_inference/robot_client.py
+index a250a08f..f5a1d239 100644
+--- a/src/lerobot/async_inference/robot_client.py
++++ b/src/lerobot/async_inference/robot_client.py
+@@ -94,6 +94,15 @@ class RobotClient:
+         self.config = config
+         self.robot = make_robot_from_config(config.robot)
+         self.robot.connect()
++        self.initial_position = None
++        if config.return_to_initial_position:
++            initial_observation = self.robot.get_observation()
++            self.initial_position = {
++                key: float(initial_observation[key])
++                for key in self.robot.action_features
++                if key in initial_observation
++            }
++            self.logger.info("Captured initial robot position (%d keys)", len(self.initial_position))
+ 
+         lerobot_features = map_robot_keys_to_lerobot_features(self.robot)
+ 
+@@ -106,6 +115,7 @@ class RobotClient:
+             lerobot_features,
+             config.actions_per_chunk,
+             config.policy_device,
++            config.rename_map,
+         )
+         self.channel = grpc.insecure_channel(
+             self.server_address, grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s")
+@@ -157,7 +167,8 @@ class RobotClient:
+             self.logger.debug(
+                 f"Policy type: {self.policy_config.policy_type} | "
+                 f"Pretrained name or path: {self.policy_config.pretrained_name_or_path} | "
+-                f"Device: {self.policy_config.device}"
++                f"Device: {self.policy_config.device} | "
++                f"Rename map: {self.policy_config.rename_map}"
+             )
+ 
+             self.stub.SendPolicyInstructions(policy_setup)
+@@ -174,6 +185,9 @@ class RobotClient:
+         """Stop the robot client"""
+         self.shutdown_event.set()
+ 
++        if self.config.return_to_initial_position and self.initial_position:
++            self._return_to_initial_position()
++
+         self.robot.disconnect()
+         self.logger.debug("Robot disconnected")
+ 
+@@ -364,9 +378,62 @@ class RobotClient:
+             return not self.action_queue.empty()
+ 
+     def _action_tensor_to_action_dict(self, action_tensor: torch.Tensor) -> dict[str, float]:
+-        action = {key: action_tensor[i].item() for i, key in enumerate(self.robot.action_features)}
++        action_tensor = action_tensor.flatten()
++        action_keys = list(self.robot.action_features)
++        action_index_map = self.config.action_index_map
++
++        if action_index_map:
++            missing_keys = [key for key in action_keys if key not in action_index_map]
++            unknown_keys = [key for key in action_index_map if key not in self.robot.action_features]
++            if missing_keys or unknown_keys:
++                raise ValueError(
++                    "Invalid action_index_map for robot action features. "
++                    f"Missing robot keys: {missing_keys}; unknown mapped keys: {unknown_keys}"
++                )
++            max_index = max(action_index_map.values(), default=-1)
++            if max_index >= action_tensor.numel():
++                raise ValueError(
++                    f"action_index_map references policy action index {max_index}, "
++                    f"but received only {action_tensor.numel()} action values"
++                )
++            return {key: action_tensor[action_index_map[key]].item() for key in action_keys}
++
++        if action_tensor.numel() != len(action_keys):
++            raise ValueError(
++                f"Received action with {action_tensor.numel()} values, but robot needs exactly "
++                f"{len(action_keys)} action values: {action_keys}. Refusing implicit first-N action "
++                "mapping; provide a robot-specific checkpoint or an explicit action_index_map after "
++                "verifying action order and units."
++            )
++        action = {key: action_tensor[i].item() for i, key in enumerate(action_keys)}
+         return action
+ 
++    def _return_to_initial_position(self) -> None:
++        try:
++            current_observation = self.robot.get_observation()
++            current_position = {
++                key: float(current_observation[key])
++                for key in self.initial_position
++                if key in current_observation
++            }
++            if not current_position:
++                self.logger.warning("Skipping return-to-initial: no current joint positions available")
++                return
++
++            steps = max(1, int(self.config.return_to_initial_duration_s * self.config.fps))
++            self.logger.info("Returning robot to initial position over %d steps", steps)
++            for step in range(1, steps + 1):
++                alpha = step / steps
++                action = {
++                    key: current_position[key] + (self.initial_position[key] - current_position[key]) * alpha
++                    for key in current_position
++                    if key in self.initial_position
++                }
++                self.robot.send_action(action)
++                time.sleep(self.config.environment_dt)
++        except Exception as exc:
++            self.logger.warning("Failed to return robot to initial position: %r", exc)
++
+     def control_loop_action(self, verbose: bool = False) -> dict[str, Any]:
+         """Reading and performing actions in local queue"""
+ 
+@@ -464,11 +531,32 @@ class RobotClient:
+         _performed_action = None
+         _captured_observation = None
+ 
++        deadline = (
++            time.perf_counter() + self.config.run_duration_s if self.config.run_duration_s > 0 else None
++        )
++        first_action_deadline_set = False
++
+         while self.running:
++            if deadline is not None and time.perf_counter() >= deadline:
++                self.logger.info("Run duration reached (%.2fs); stopping client", self.config.run_duration_s)
++                self.shutdown_event.set()
++                break
++
+             control_loop_start = time.perf_counter()
+             """Control loop: (1) Performing actions, when available"""
+             if self.actions_available():
+                 _performed_action = self.control_loop_action(verbose)
++                if (
++                    self.config.run_duration_starts_on_first_action
++                    and deadline is not None
++                    and not first_action_deadline_set
++                ):
++                    deadline = time.perf_counter() + self.config.run_duration_s
++                    first_action_deadline_set = True
++                    self.logger.info(
++                        "Run duration timer started from first executed action (%.2fs)",
++                        self.config.run_duration_s,
++                    )
+ 
+             """Control loop: (2) Streaming observations to the remote policy server"""
+             if self._ready_to_send_observation():
+diff --git a/src/lerobot/configs/video.py b/src/lerobot/configs/video.py
+index bf247145..1d594fdd 100644
+--- a/src/lerobot/configs/video.py
++++ b/src/lerobot/configs/video.py
+@@ -210,7 +210,7 @@ class VideoEncoderConfig:
+             if self.crf is not None:
+                 opts["q:v"] = max(1, min(100, 100 - self.crf * 2))
+         elif self.vcodec in ("h264_nvenc", "hevc_nvenc"):
+-            opts["rc"] = 0
++            opts["rc"] = 0 if not as_strings else "0"
+             set_if("qp", self.crf)
+             set_if("preset", self.preset)
+         elif self.vcodec == "h264_vaapi":
+diff --git a/src/lerobot/datasets/streaming_dataset.py b/src/lerobot/datasets/streaming_dataset.py
+index 3c1e4a73..2997b57d 100644
+--- a/src/lerobot/datasets/streaming_dataset.py
++++ b/src/lerobot/datasets/streaming_dataset.py
+@@ -16,6 +16,7 @@
+ from collections import deque
+ from collections.abc import Callable, Generator, Iterable, Iterator
+ from pathlib import Path
++from typing import Generic, TypeVar
+ 
+ import datasets
+ import numpy as np
+@@ -38,6 +39,8 @@ from .video_utils import (
+     decode_video_frames_torchcodec,
+ )
+ 
++T = TypeVar("T")
++
+ 
+ class LookBackError(Exception):
+     """
+@@ -55,7 +58,7 @@ class LookAheadError(Exception):
+     pass
+ 
+ 
+-class Backtrackable[T]:
++class Backtrackable(Generic[T]):
+     """
+     Wrap any iterator/iterable so you can step back up to `history` items
+     and look ahead up to `lookahead` items.
+diff --git a/src/lerobot/datasets/video_utils.py b/src/lerobot/datasets/video_utils.py
+index e823a406..c2242e8f 100644
+--- a/src/lerobot/datasets/video_utils.py
++++ b/src/lerobot/datasets/video_utils.py
+@@ -45,6 +45,14 @@ from lerobot.utils.import_utils import get_safe_default_video_backend
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _set_av_logging_level(level: int) -> None:
++    logging.getLogger("libav").setLevel(level)
++    with contextlib.suppress(Exception):
++        av.logging.set_level(level)
++    with contextlib.suppress(Exception):
++        av.logging.set_libav_level(level)
++
++
+ def decode_video_frames(
+     video_path: Path | str,
+     timestamps: list[float],
+@@ -371,8 +379,7 @@ def encode_video_frames(
+ 
+     # Set logging level
+     if log_level is not None:
+-        # "While less efficient, it is generally preferable to modify logging with Python's logging"
+-        logging.getLogger("libav").setLevel(log_level)
++        _set_av_logging_level(log_level)
+ 
+     # Create and open output file (overwrite by default)
+     with av.open(str(video_path), "w") as output:
+@@ -545,7 +552,7 @@ class _CameraEncoderThread(threading.Thread):
+         frame_count = 0
+ 
+         try:
+-            logging.getLogger("libav").setLevel(av.logging.WARNING)
++            _set_av_logging_level(av.logging.WARNING)
+ 
+             while True:
+                 try:
+@@ -871,7 +878,7 @@ with warnings.catch_warnings():
+ 
+ def get_audio_info(video_path: Path | str) -> dict:
+     # Set logging level
+-    logging.getLogger("libav").setLevel(av.logging.WARNING)
++    _set_av_logging_level(av.logging.WARNING)
+ 
+     # Getting audio stream information
+     audio_info = {}
+@@ -913,7 +920,7 @@ def get_video_info(
+             video. Stream-derived values take precedence — encoder fields are only written for keys
+             not already populated from the video file itself.
+     """
+-    logging.getLogger("libav").setLevel(av.logging.WARNING)
++    _set_av_logging_level(av.logging.WARNING)
+ 
+     # Getting video stream information
+     video_info = {}
+diff --git a/src/lerobot/motors/motors_bus.py b/src/lerobot/motors/motors_bus.py
+index 4688eaa7..8fc324b1 100644
+--- a/src/lerobot/motors/motors_bus.py
++++ b/src/lerobot/motors/motors_bus.py
+@@ -48,8 +48,8 @@ else:
+ from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+ from lerobot.utils.utils import enter_pressed, move_cursor_up
+ 
+-type NameOrID = str | int
+-type Value = int | float
++NameOrID = str | int
++Value = int | float
+ 
+ logger = logging.getLogger(__name__)
+ 
+diff --git a/src/lerobot/policies/factory.py b/src/lerobot/policies/factory.py
+index 8937bc6a..91434355 100644
+--- a/src/lerobot/policies/factory.py
++++ b/src/lerobot/policies/factory.py
+@@ -18,7 +18,9 @@ from __future__ import annotations
+ 
+ import importlib
+ import logging
+-from typing import TYPE_CHECKING, Any, TypedDict, Unpack
++from typing import TYPE_CHECKING, Any, TypedDict
++
++from typing_extensions import Unpack
+ 
+ import torch
+ 
+diff --git a/src/lerobot/policies/pi0/modeling_pi0.py b/src/lerobot/policies/pi0/modeling_pi0.py
+index 510af079..34e63ec4 100644
+--- a/src/lerobot/policies/pi0/modeling_pi0.py
++++ b/src/lerobot/policies/pi0/modeling_pi0.py
+@@ -20,7 +20,9 @@ import logging
+ import math
+ from collections import deque
+ from pathlib import Path
+-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
++from typing import TYPE_CHECKING, Literal, TypedDict
++
++from typing_extensions import Unpack
+ 
+ import torch
+ import torch.nn.functional as F  # noqa: N812
+diff --git a/src/lerobot/policies/pi05/modeling_pi05.py b/src/lerobot/policies/pi05/modeling_pi05.py
+index bdaf01f2..73cd605a 100644
+--- a/src/lerobot/policies/pi05/modeling_pi05.py
++++ b/src/lerobot/policies/pi05/modeling_pi05.py
+@@ -20,7 +20,9 @@ import logging
+ import math
+ from collections import deque
+ from pathlib import Path
+-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
++from typing import TYPE_CHECKING, Literal, TypedDict
++
++from typing_extensions import Unpack
+ 
+ import torch
+ import torch.nn.functional as F  # noqa: N812
+diff --git a/src/lerobot/policies/pi0_fast/modeling_pi0_fast.py b/src/lerobot/policies/pi0_fast/modeling_pi0_fast.py
+index d9342eb2..7802c7a0 100644
+--- a/src/lerobot/policies/pi0_fast/modeling_pi0_fast.py
++++ b/src/lerobot/policies/pi0_fast/modeling_pi0_fast.py
+@@ -18,7 +18,9 @@ import builtins
+ import logging
+ from collections import deque
+ from pathlib import Path
+-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
++from typing import TYPE_CHECKING, Literal, TypedDict
++
++from typing_extensions import Unpack
+ 
+ import numpy as np
+ import torch
+diff --git a/src/lerobot/policies/pretrained.py b/src/lerobot/policies/pretrained.py
+index 724f920f..238d6d30 100644
+--- a/src/lerobot/policies/pretrained.py
++++ b/src/lerobot/policies/pretrained.py
+@@ -19,7 +19,9 @@ import os
+ from importlib.resources import files
+ from pathlib import Path
+ from tempfile import TemporaryDirectory
+-from typing import TypedDict, TypeVar, Unpack
++from typing import TypedDict, TypeVar
++
++from typing_extensions import Unpack
+ 
+ import packaging
+ import safetensors
+diff --git a/src/lerobot/policies/smolvla/modeling_smolvla.py b/src/lerobot/policies/smolvla/modeling_smolvla.py
+index 8fd60c1f..0b1bd84d 100644
+--- a/src/lerobot/policies/smolvla/modeling_smolvla.py
++++ b/src/lerobot/policies/smolvla/modeling_smolvla.py
+@@ -54,7 +54,9 @@ policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
+ 
+ import math
+ from collections import deque
+-from typing import TypedDict, Unpack
++from typing import TypedDict
++
++from typing_extensions import Unpack
+ 
+ import torch
+ import torch.nn.functional as F  # noqa: N812
+diff --git a/src/lerobot/policies/utils.py b/src/lerobot/policies/utils.py
+index c3712781..21dad5af 100644
+--- a/src/lerobot/policies/utils.py
++++ b/src/lerobot/policies/utils.py
+@@ -194,6 +194,13 @@ def make_robot_action(action_tensor: PolicyAction, ds_features: dict[str, dict])
+     action_tensor = action_tensor.to("cpu")
+ 
+     action_names = ds_features[ACTION]["names"]
++    if action_tensor.numel() != len(action_names):
++        raise ValueError(
++            f"Policy returned {action_tensor.numel()} action values, but the robot/dataset action "
++            f"schema has {len(action_names)} names: {action_names}. Refusing implicit first-N action "
++            "mapping; use a checkpoint whose action schema matches the robot, or add an explicit "
++            "robot-specific action transform."
++        )
+     act_processed_policy: RobotAction = {
+         f"{name}": float(action_tensor[i]) for i, name in enumerate(action_names)
+     }
+diff --git a/src/lerobot/processor/pipeline.py b/src/lerobot/processor/pipeline.py
+index 2b949d5c..57d33ef5 100644
+--- a/src/lerobot/processor/pipeline.py
++++ b/src/lerobot/processor/pipeline.py
+@@ -39,7 +39,7 @@ from collections.abc import Callable, Iterable, Sequence
+ from copy import deepcopy
+ from dataclasses import dataclass, field
+ from pathlib import Path
+-from typing import Any, TypedDict, TypeVar, cast
++from typing import Any, Generic, TypedDict, TypeVar, cast
+ 
+ import torch
+ from huggingface_hub import hf_hub_download
+@@ -252,7 +252,7 @@ class ProcessorMigrationError(Exception):
+ 
+ 
+ @dataclass
+-class DataProcessorPipeline[TInput, TOutput](HubMixin):
++class DataProcessorPipeline(HubMixin, Generic[TInput, TOutput]):
+     """A sequential pipeline for processing data, integrated with the Hugging Face Hub.
+ 
+     This class chains together multiple `ProcessorStep` instances to form a complete
+diff --git a/src/lerobot/scripts/lerobot_record.py b/src/lerobot/scripts/lerobot_record.py
+index c8419cb1..64d56829 100644
+--- a/src/lerobot/scripts/lerobot_record.py
++++ b/src/lerobot/scripts/lerobot_record.py
+@@ -87,6 +87,10 @@ lerobot-record \\
+ """
+ 
+ import logging
++import queue
++import select
++import sys
++import threading
+ import time
+ from dataclasses import asdict, dataclass
+ from pprint import pformat
+@@ -176,6 +180,8 @@ class RecordConfig:
+     play_sounds: bool = True
+     # Resume recording on an existing dataset.
+     resume: bool = False
++    # Wait for Enter before each episode while keeping robot/cameras connected.
++    manual_episode_start: bool = False
+ 
+     def __post_init__(self):
+         if self.teleop is None:
+@@ -186,6 +192,82 @@ class RecordConfig:
+             )
+ 
+ 
++class AsyncRerunLogger:
++    """Send live display frames without blocking the record/control loop."""
++
++    def __init__(self, compress_images: bool):
++        self.compress_images = compress_images
++        self._queue: queue.Queue = queue.Queue(maxsize=1)
++        self._stop_event = threading.Event()
++        self._thread = threading.Thread(target=self._run, name="rerun-display", daemon=True)
++        self._dropped_frames = 0
++
++    def start(self) -> None:
++        self._thread.start()
++
++    def submit(self, observation: RobotObservation, action: RobotAction | None) -> None:
++        item = (dict(observation), dict(action) if action is not None else None)
++        while True:
++            try:
++                self._queue.put_nowait(item)
++                return
++            except queue.Full:
++                try:
++                    self._queue.get_nowait()
++                    self._queue.task_done()
++                    self._dropped_frames += 1
++                except queue.Empty:
++                    pass
++
++    def close(self) -> None:
++        self._stop_event.set()
++        self._thread.join(timeout=2.0)
++        if self._dropped_frames:
++            logging.info("Dropped %s live-display frame(s) to keep recording non-blocking.", self._dropped_frames)
++
++    def _run(self) -> None:
++        while not self._stop_event.is_set() or not self._queue.empty():
++            try:
++                observation, action = self._queue.get(timeout=0.1)
++            except queue.Empty:
++                continue
++
++            try:
++                log_rerun_data(
++                    observation=observation,
++                    action=action,
++                    compress_images=self.compress_images,
++                )
++            except Exception:
++                logging.exception("Live Rerun display logging failed.")
++            finally:
++                self._queue.task_done()
++
++
++def _flush_pending_stdin() -> None:
++    if not sys.stdin.isatty():
++        return
++
++    while True:
++        ready, _, _ = select.select([sys.stdin], [], [], 0)
++        if not ready:
++            return
++        sys.stdin.readline()
++
++
++def _confirm_episode_start(recorded_episodes: int, target_episodes: int, dataset_episode_index: int) -> bool:
++    if not sys.stdin.isatty():
++        logging.warning("manual_episode_start requested but stdin is not interactive; continuing automatically.")
++        return True
++
++    _flush_pending_stdin()
++    answer = input(
++        f"Press Enter to record episode {recorded_episodes + 1}/{target_episodes} "
++        f"(dataset index {dataset_episode_index}), or type q then Enter to stop: "
++    )
++    return answer.strip().lower() not in {"q", "quit", "exit", "stop"}
++
++
+ """ --------------- record_loop() data flow --------------------------
+        [ Robot ]
+            V
+@@ -232,6 +314,7 @@ def record_loop(
+     single_task: str | None = None,
+     display_data: bool = False,
+     display_compressed_images: bool = False,
++    display_logger: AsyncRerunLogger | None = None,
+ ):
+     if dataset is not None and dataset.fps != fps:
+         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
+@@ -325,9 +408,14 @@ def record_loop(
+             dataset.add_frame(frame)
+ 
+         if display_data:
+-            log_rerun_data(
+-                observation=obs_processed, action=action_values, compress_images=display_compressed_images
+-            )
++            if display_logger is not None:
++                display_logger.submit(observation=obs_processed, action=action_values)
++            else:
++                log_rerun_data(
++                    observation=obs_processed,
++                    action=action_values,
++                    compress_images=display_compressed_images,
++                )
+ 
+         dt_s = time.perf_counter() - start_loop_t
+ 
+@@ -390,6 +478,7 @@ def record(
+ 
+     dataset = None
+     listener = None
++    display_logger = AsyncRerunLogger(display_compressed_images) if cfg.display_data else None
+ 
+     try:
+         if cfg.resume:
+@@ -444,9 +533,20 @@ def record(
+                 "Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.camera_encoder.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding"
+             )
+ 
++        if display_logger is not None:
++            display_logger.start()
++
+         with VideoEncodingManager(dataset):
+             recorded_episodes = 0
+             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
++                if cfg.manual_episode_start and not _confirm_episode_start(
++                    recorded_episodes,
++                    cfg.dataset.num_episodes,
++                    dataset.num_episodes,
++                ):
++                    events["stop_recording"] = True
++                    break
++
+                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                 record_loop(
+                     robot=robot,
+@@ -461,11 +561,12 @@ def record(
+                     single_task=cfg.dataset.single_task,
+                     display_data=cfg.display_data,
+                     display_compressed_images=display_compressed_images,
++                    display_logger=display_logger,
+                 )
+ 
+                 # Execute a few seconds without recording to give time to manually reset the environment
+                 # Skip reset for the last episode to be recorded
+-                if not events["stop_recording"] and (
++                if not cfg.manual_episode_start and not events["stop_recording"] and (
+                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
+                 ):
+                     log_say("Reset the environment", cfg.play_sounds)
+@@ -481,6 +582,7 @@ def record(
+                         control_time_s=cfg.dataset.reset_time_s,
+                         single_task=cfg.dataset.single_task,
+                         display_data=cfg.display_data,
++                        display_logger=display_logger,
+                     )
+ 
+                 if events["rerecord_episode"]:
+@@ -495,6 +597,9 @@ def record(
+     finally:
+         log_say("Stop recording", cfg.play_sounds, blocking=True)
+ 
++        if display_logger is not None:
++            display_logger.close()
++
+         if dataset:
+             dataset.finalize()
+ 
+diff --git a/src/lerobot/utils/io_utils.py b/src/lerobot/utils/io_utils.py
+index e037b412..c1059e09 100644
+--- a/src/lerobot/utils/io_utils.py
++++ b/src/lerobot/utils/io_utils.py
+@@ -16,11 +16,12 @@
+ import json
+ import logging
+ from pathlib import Path
+-from typing import Any
++from typing import Any, TypeVar
+ 
+ logger = logging.getLogger(__name__)
+ 
+ JsonLike = str | int | float | bool | None | list["JsonLike"] | dict[str, "JsonLike"] | tuple["JsonLike", ...]
++TJsonLike = TypeVar("TJsonLike", bound=JsonLike)
+ 
+ 
+ def load_json(fpath: Path) -> Any:
+@@ -90,7 +91,7 @@ def write_video(video_path: str | Path, stacked_frames: list, fps: int) -> None:
+             container.mux(packet)
+ 
+ 
+-def deserialize_json_into_object[T: JsonLike](fpath: Path, obj: T) -> T:
++def deserialize_json_into_object(fpath: Path, obj: TJsonLike) -> TJsonLike:
+     """
+     Loads the JSON data from `fpath` and recursively fills `obj` with the
+     corresponding values (strictly matching structure and types).

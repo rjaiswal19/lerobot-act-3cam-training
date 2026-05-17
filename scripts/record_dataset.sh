@@ -31,6 +31,10 @@ cmd+=(
   --dataset.encoder_threads="$ENCODER_THREADS"
   --dataset.push_to_hub="$PUSH_TO_HUB"
   --resume="$RECORD_RESUME"
+  --manual_episode_start="$MANUAL_EPISODE_START"
 )
+append_arg_if_set cmd "--dataset.camera_encoder.vcodec" "${CAMERA_ENCODER_VCODEC:-}"
+append_arg_if_set cmd "--dataset.camera_encoder.preset" "${CAMERA_ENCODER_PRESET:-}"
+append_arg_if_set cmd "--dataset.camera_encoder.crf" "${CAMERA_ENCODER_CRF:-}"
 
 run_command "${cmd[@]}"

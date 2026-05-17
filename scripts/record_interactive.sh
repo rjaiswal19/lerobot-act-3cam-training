@@ -133,7 +133,7 @@ while (( completed < NUM_EPISODES )); do
     --dataset.repo_id="$DATASET_REPO_ID"
     --dataset.root="$LOCAL_DATASET_DIR"
     --dataset.fps="$DATASET_FPS"
-    --dataset.num_episodes="$next_episode"
+    --dataset.num_episodes=1
     --dataset.single_task="$TASK_DESCRIPTION"
     --dataset.episode_time_s="$EPISODE_TIME_S"
     --dataset.reset_time_s=0
@@ -142,6 +142,9 @@ while (( completed < NUM_EPISODES )); do
     --dataset.push_to_hub="$PUSH_TO_HUB"
     --resume="$resume_flag"
   )
+  append_arg_if_set cmd "--dataset.camera_encoder.vcodec" "${CAMERA_ENCODER_VCODEC:-}"
+  append_arg_if_set cmd "--dataset.camera_encoder.preset" "${CAMERA_ENCODER_PRESET:-}"
+  append_arg_if_set cmd "--dataset.camera_encoder.crf" "${CAMERA_ENCODER_CRF:-}"
 
   run_command "${cmd[@]}"
 

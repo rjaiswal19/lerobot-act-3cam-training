@@ -55,8 +55,11 @@ The camera count, image shapes, joint-state dimension, and action dimension are 
 Dataset repo names are task-specific and policy-independent:
 
 ```text
-pour  -> seeed_3cam_pour_training
-swirl -> seeed_3cam_swirl_beaker_training
+pour                 -> seeed_3cam_pour_training
+swirl                -> seeed_3cam_swirl_beaker_training
+pour_blue_to_green   -> seeed_3cam_pour_blue_to_green_training
+pour_yellow_to_green -> seeed_3cam_pour_yellow_to_green_training
+swirl_green_beaker   -> seeed_3cam_swirl_green_beaker_training
 ```
 
 Policy/model repo names include the selected `POLICY_TYPE`:

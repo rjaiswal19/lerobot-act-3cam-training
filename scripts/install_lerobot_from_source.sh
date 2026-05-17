@@ -7,6 +7,24 @@ LEROBOT_DIR="$ROOT_DIR/external/lerobot"
 REBOT_TELEOP_DIR="$ROOT_DIR/external/lerobot-teleoperator-rebot-arm-102"
 REBOT_ROBOT_DIR="$ROOT_DIR/external/lerobot-robot-seeed-b601"
 ZED_CAMERA_DIR="$ROOT_DIR/packages/lerobot_camera_zed_sdk"
+LEROBOT_PATCH="$ROOT_DIR/patches/lerobot/local-runtime-fixes.patch"
+
+apply_lerobot_patch() {
+  if [[ ! -f "$LEROBOT_PATCH" ]]; then
+    return 0
+  fi
+
+  if git -C "$LEROBOT_DIR" apply --check "$LEROBOT_PATCH" >/dev/null 2>&1; then
+    echo "Applying local LeRobot runtime patch..."
+    git -C "$LEROBOT_DIR" apply "$LEROBOT_PATCH"
+  elif git -C "$LEROBOT_DIR" apply --reverse --check "$LEROBOT_PATCH" >/dev/null 2>&1; then
+    echo "Local LeRobot runtime patch already applied."
+  else
+    echo "Could not apply $LEROBOT_PATCH to $LEROBOT_DIR."
+    echo "Reset or update external/lerobot, then rerun this script."
+    exit 1
+  fi
+}
 
 install_pyzed_for_current_python() {
   local python_bin major minor py_tag arch wheel_url
@@ -44,6 +62,8 @@ fi
 if [[ ! -d "$REBOT_ROBOT_DIR" ]]; then
   git clone https://github.com/Seeed-Projects/lerobot-robot-seeed-b601.git "$REBOT_ROBOT_DIR"
 fi
+
+apply_lerobot_patch
 
 python_install -U "huggingface_hub[cli]"
 python_install -e "$LEROBOT_DIR[feetech,core_scripts,training]"
